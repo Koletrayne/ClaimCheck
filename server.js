@@ -2,6 +2,7 @@ require('dotenv').config();
 
 const express = require('express');
 const cors = require('cors');
+const path = require('path');
 const { analyzeClaim } = require('./lib/analyze');
 
 const app = express();
@@ -16,6 +17,7 @@ app.use(cors({
   origin: allowedOrigins.length ? allowedOrigins : true,
 }));
 app.use(express.json({ limit: '256kb' }));
+app.use(express.static(path.join(__dirname, 'public')));
 
 app.get('/health', (req, res) => {
   res.json({

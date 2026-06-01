@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ClaimCheck</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header class="site-header">
+    <svg class="logo-icon" viewBox="0 0 32 32" fill="none" aria-hidden="true">
+      <circle cx="16" cy="16" r="14" stroke="currentColor" stroke-width="2"/>
+      <path d="M10 16l4 4 8-8" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>
+    <span class="site-name">ClaimCheck</span>
+  </header>
+
+  <main class="main">
+    <div class="intro">
+      <h1 class="intro__title">ClaimCheck</h1>
+      <p class="intro__subtitle">Check online claims with evidence-based analysis.</p>
+    </div>
+
+    <div class="card">
+      <textarea
+        id="claim-input"
+        class="claim-textarea"
+        placeholder='e.g. "Drinking coffee reduces the risk of type 2 diabetes."'
+        rows="5"
+        maxlength="8000"
+        aria-label="Claim to check"
+        spellcheck="true"
+      ></textarea>
+      <p class="helper-text">Paste a claim, headline, statistic, or short paragraph. Max 8,000 characters.</p>
+
+      <div id="field-error" class="field-error" hidden></div>
+
+      <div class="controls">
+        <label class="academic-label">
+          <input type="checkbox" id="academic-toggle" />
+          <span>Academic sources only</span>
+        </label>
+        <button id="check-btn" class="btn-primary">Check Claim</button>
+      </div>
+    </div>
+
+    <div id="status" class="status" hidden>
+      <span class="spinner" aria-hidden="true"></span>
+      Analyzing claim — this may take up to 30 seconds&hellip;
+    </div>
+
+    <div id="api-error" class="error-banner" hidden>
+      <p id="api-error-text"></p>
+    </div>
+
+    <div id="results" hidden></div>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>
