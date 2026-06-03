@@ -13,12 +13,41 @@
       <path d="M10 16l4 4 8-8" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
     </svg>
     <span class="site-name">ClaimCheck</span>
+    <div class="header-actions">
+      <button id="history-btn" class="header-btn" type="button" aria-label="View claim history">
+        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2"/>
+          <path d="M12 7v5l3 3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </button>
+      <button id="theme-toggle" class="header-btn" type="button" aria-label="Toggle dark mode">
+        <svg class="icon-moon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        <svg class="icon-sun" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <circle cx="12" cy="12" r="5" stroke="currentColor" stroke-width="2"/>
+          <line x1="12" y1="1" x2="12" y2="3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          <line x1="12" y1="21" x2="12" y2="23" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          <line x1="4.22" y1="4.22" x2="5.64" y2="5.64" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          <line x1="18.36" y1="18.36" x2="19.78" y2="19.78" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          <line x1="1" y1="12" x2="3" y2="12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          <line x1="21" y1="12" x2="23" y2="12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          <line x1="4.22" y1="19.78" x2="5.64" y2="18.36" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          <line x1="18.36" y1="5.64" x2="19.78" y2="4.22" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+        </svg>
+      </button>
+    </div>
   </header>
 
   <main class="main">
     <div class="intro">
       <h1 class="intro__title">ClaimCheck</h1>
       <p class="intro__subtitle">Check online claims with evidence-based analysis.</p>
+    </div>
+
+    <div id="shared-banner" class="shared-banner" hidden>
+      <span class="shared-banner__text">You're viewing a shared analysis. Edit the claim and check again to run your own.</span>
+      <button id="dismiss-shared" class="shared-banner__dismiss" type="button" aria-label="Dismiss">&times;</button>
     </div>
 
     <div class="card">
@@ -36,12 +65,36 @@
       <div id="field-error" class="field-error" hidden></div>
 
       <div class="controls">
-        <label class="academic-label">
-          <input type="checkbox" id="academic-toggle" />
-          <span>Academic sources only</span>
-        </label>
+        <div class="toggle-group">
+          <label class="academic-label">
+            <input type="checkbox" id="academic-toggle" />
+            <span>Academic sources only</span>
+          </label>
+          <label class="academic-label" title="Make your own prediction before the evidence is revealed, then compare.">
+            <input type="checkbox" id="predict-toggle" checked />
+            <span>Predict first</span>
+          </label>
+        </div>
         <button id="check-btn" class="btn-primary">Check Claim</button>
       </div>
+    </div>
+
+    <div class="library">
+      <button id="library-toggle" class="library__toggle" type="button" aria-expanded="false" aria-controls="library-panel">
+        <span class="library__chevron" aria-hidden="true">&rsaquo;</span>
+        Need a claim to try? Browse examples
+      </button>
+      <div id="library-panel" class="library__panel" hidden></div>
+    </div>
+
+    <div id="predict-panel" class="predict-panel" hidden>
+      <p class="predict-panel__prompt">Before you see the evidence&nbsp;&mdash; what's your read on this claim?</p>
+      <div class="predict-panel__options" role="group" aria-label="Your prediction">
+        <button class="predict-btn" type="button" data-prediction="true">Likely&nbsp;true</button>
+        <button class="predict-btn" type="button" data-prediction="unsure">Not&nbsp;sure</button>
+        <button class="predict-btn" type="button" data-prediction="false">Likely&nbsp;false</button>
+      </div>
+      <p class="predict-panel__hint">Your prediction stays on this device &mdash; it's just to help you reflect.</p>
     </div>
 
     <div id="status" class="status" hidden>
@@ -55,6 +108,16 @@
 
     <div id="results" hidden></div>
   </main>
+
+  <div id="history-modal" class="history-overlay" hidden role="dialog" aria-modal="true" aria-labelledby="history-title">
+    <div class="history-panel">
+      <div class="history-panel-head">
+        <h2 id="history-title" class="history-title">History</h2>
+        <button id="history-close" class="history-close" type="button" aria-label="Close history">&times;</button>
+      </div>
+      <div id="history-list" class="history-list"></div>
+    </div>
+  </div>
 
   <script src="app.js"></script>
 </body>

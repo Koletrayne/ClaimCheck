@@ -8,6 +8,224 @@ const apiError      = document.getElementById('api-error');
 const apiErrorText  = document.getElementById('api-error-text');
 const resultsEl     = document.getElementById('results');
 const academicToggle = document.getElementById('academic-toggle');
+const predictToggle  = document.getElementById('predict-toggle');
+const predictPanel   = document.getElementById('predict-panel');
+const sharedBanner   = document.getElementById('shared-banner');
+const dismissShared  = document.getElementById('dismiss-shared');
+const libraryToggle  = document.getElementById('library-toggle');
+const libraryPanel   = document.getElementById('library-panel');
+const themeToggle    = document.getElementById('theme-toggle');
+const historyBtn     = document.getElementById('history-btn');
+const historyModal   = document.getElementById('history-modal');
+const historyClose   = document.getElementById('history-close');
+const historyListEl  = document.getElementById('history-list');
+
+(function initTheme() {
+  const saved = localStorage.getItem('theme');
+  const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+  document.documentElement.setAttribute('data-theme', (saved ? saved === 'dark' : prefersDark) ? 'dark' : 'light');
+})();
+
+themeToggle.addEventListener('click', () => {
+  const next = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+  document.documentElement.setAttribute('data-theme', next);
+  localStorage.setItem('theme', next);
+});
+
+/* ── Claim history ─────────────────────────────────── */
+
+const HISTORY_KEY = 'claimcheck_history';
+const HISTORY_MAX = 50;
+
+function loadHistory() {
+  try { return JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]'); } catch { return []; }
+}
+
+function saveToHistory(entry) {
+  const list = loadHistory();
+  list.unshift(entry);
+  if (list.length > HISTORY_MAX) list.length = HISTORY_MAX;
+  localStorage.setItem(HISTORY_KEY, JSON.stringify(list));
+}
+
+function removeHistoryEntry(id) {
+  const list = loadHistory().filter(e => e.id !== id);
+  localStorage.setItem(HISTORY_KEY, JSON.stringify(list));
+}
+
+function clearHistory() {
+  localStorage.removeItem(HISTORY_KEY);
+}
+
+historyBtn.addEventListener('click', openHistory);
+historyClose.addEventListener('click', closeHistory);
+historyModal.addEventListener('click', (e) => { if (e.target === historyModal) closeHistory(); });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !historyModal.hidden) closeHistory(); });
+
+function openHistory() {
+  renderHistoryList();
+  historyModal.hidden = false;
+  historyClose.focus();
+}
+
+function closeHistory() {
+  historyModal.hidden = true;
+  historyBtn.focus();
+}
+
+function renderHistoryList() {
+  historyListEl.innerHTML = '';
+  const entries = loadHistory();
+
+  if (!entries.length) {
+    const empty = el('p', 'history-empty');
+    empty.textContent = 'No analyses yet. Check a claim to see it here.';
+    historyListEl.appendChild(empty);
+    return;
+  }
+
+  const subhead = el('div', 'history-subhead');
+  const count = el('span', 'history-count');
+  count.textContent = entries.length + ' entr' + (entries.length === 1 ? 'y' : 'ies');
+  const clearBtn = el('button', 'history-clear');
+  clearBtn.type = 'button';
+  clearBtn.textContent = 'Clear all';
+  clearBtn.addEventListener('click', () => {
+    clearHistory();
+    renderHistoryList();
+  });
+  subhead.appendChild(count);
+  subhead.appendChild(clearBtn);
+  historyListEl.appendChild(subhead);
+
+  for (const entry of entries) {
+    historyListEl.appendChild(makeHistoryItem(entry));
+  }
+}
+
+function makeHistoryItem(entry) {
+  const wrap = el('div', 'history-item');
+
+  const loadBtn = el('button', 'history-item__load');
+  loadBtn.type = 'button';
+
+  const claimP = el('p', 'history-item__claim');
+  claimP.textContent = entry.claim_text || entry.claim;
+  loadBtn.appendChild(claimP);
+
+  const meta = el('div', 'history-item__meta');
+  const badge = el('span', `history-verdict history-verdict--${entry.verdict}`);
+  badge.textContent = verdictLabel(entry.verdict);
+  const date = el('span', 'history-item__date');
+  date.textContent = formatHistoryDate(entry.timestamp);
+  meta.appendChild(badge);
+  meta.appendChild(date);
+  loadBtn.appendChild(meta);
+
+  loadBtn.addEventListener('click', () => loadHistoryEntry(entry));
+  wrap.appendChild(loadBtn);
+
+  const delBtn = el('button', 'history-item__delete');
+  delBtn.type = 'button';
+  delBtn.setAttribute('aria-label', 'Remove this entry');
+  delBtn.textContent = '×';
+  delBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    removeHistoryEntry(entry.id);
+    wrap.remove();
+    const remaining = historyListEl.querySelectorAll('.history-item');
+    if (!remaining.length) renderHistoryList();
+    else {
+      const countEl = historyListEl.querySelector('.history-count');
+      if (countEl) {
+        const n = remaining.length;
+        countEl.textContent = n + ' entr' + (n === 1 ? 'y' : 'ies');
+      }
+    }
+  });
+  wrap.appendChild(delBtn);
+
+  return wrap;
+}
+
+function loadHistoryEntry(entry) {
+  closeHistory();
+  clearAll();
+  claimInput.value       = typeof entry.claim === 'string' ? entry.claim : '';
+  academicToggle.checked = Boolean(entry.academic);
+  currentPrediction      = entry.prediction || null;
+  lastResult = { v: 1, claim: entry.claim, academic: entry.academic, prediction: entry.prediction, data: entry.data };
+  lastRequest = { text: entry.claim, academic: entry.academic };
+  renderResults(entry.data, { prediction: entry.prediction });
+  resultsEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function formatHistoryDate(ts) {
+  const d   = new Date(ts);
+  const now = new Date();
+  const diffMs   = now - d;
+  const diffMins = Math.floor(diffMs / 60000);
+  const diffDays = Math.floor(diffMs / 86400000);
+  if (diffMins < 1)  return 'Just now';
+  if (diffMins < 60) return diffMins + 'm ago';
+  if (diffDays === 0) return 'Today ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  if (diffDays === 1) return 'Yesterday';
+  if (diffDays < 7)  return diffDays + ' days ago';
+  return d.toLocaleDateString([], { month: 'short', day: 'numeric' });
+}
+
+let currentAnalysis  = null;   // in-flight fetch promise
+let currentPrediction = null;  // 'true' | 'false' | 'unsure' | null
+let lastRequest      = { text: '', academic: false };
+let lastResult       = null;   // shareable payload of the rendered analysis
+
+const STARTER_CLAIMS = [
+  {
+    category: 'Science & Nature',
+    claims: [
+      'Lightning never strikes the same place twice.',
+      'The Great Wall of China is visible from space with the naked eye.',
+      'Antibiotics are an effective treatment for viral infections like the common cold.',
+      'A goldfish has a memory span of only three seconds.',
+    ],
+  },
+  {
+    category: 'Health & Nutrition',
+    claims: [
+      'Eating carrots significantly improves your night vision.',
+      'You must drink eight glasses of water a day to stay healthy.',
+      'Vitamin C supplements prevent the common cold.',
+      'Vaccines cause autism.',
+    ],
+  },
+  {
+    category: 'History & Society',
+    claims: [
+      'Napoleon Bonaparte was unusually short for his time.',
+      'Humans only use 10 percent of their brains.',
+      'People convicted in the Salem witch trials were burned at the stake.',
+      'Albert Einstein failed mathematics as a student.',
+    ],
+  },
+  {
+    category: 'Media & Technology',
+    claims: [
+      "A browser's incognito mode makes your web activity completely anonymous.",
+      '5G mobile networks spread the COVID-19 virus.',
+      'Charging your phone overnight permanently damages the battery.',
+      'A higher megapixel count always means a better camera.',
+    ],
+  },
+  {
+    category: 'Civic & Environment',
+    claims: [
+      'The United States incarcerates more people than any other country.',
+      'In many markets, newly built solar and wind power is now cheaper than new coal or gas.',
+      'Recycling alone can solve the ocean plastic pollution crisis.',
+      'Electric cars produce zero emissions over their full lifecycle.',
+    ],
+  },
+];
 
 checkBtn.addEventListener('click', checkClaim);
 
@@ -15,12 +233,25 @@ claimInput.addEventListener('keydown', (e) => {
   if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') checkClaim();
 });
 
+for (const btn of predictPanel.querySelectorAll('.predict-btn')) {
+  btn.addEventListener('click', () => onPredictionChosen(btn.dataset.prediction));
+}
+
+dismissShared.addEventListener('click', () => { sharedBanner.hidden = true; });
+
+libraryToggle.addEventListener('click', toggleLibrary);
+buildLibrary();
+
+window.addEventListener('DOMContentLoaded', loadFromHash);
+if (document.readyState !== 'loading') loadFromHash();
+
 /* ── Main flow ─────────────────────────────────────── */
 
-async function checkClaim() {
+function checkClaim() {
   const text = claimInput.value.trim();
 
   clearAll();
+  currentPrediction = null;
 
   if (!text) {
     showFieldError('Please enter a claim to check.');
@@ -33,37 +264,68 @@ async function checkClaim() {
     return;
   }
 
-  setLoading(true);
+  const academic = academicToggle.checked;
+  lastRequest = { text, academic };
 
+  // Kick off the analysis right away so the prediction step adds no latency.
+  currentAnalysis = runAnalysis(text, academic);
+  currentAnalysis.catch(() => {}); // silence unhandled rejection; handled on await
+
+  if (predictToggle.checked) {
+    showPredictPanel();
+  } else {
+    settleAnalysis();
+  }
+}
+
+async function runAnalysis(text, academic) {
+  const res = await fetch('/analyze', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text, academicMode: academic }),
+  });
+
+  let data;
   try {
-    const res = await fetch('/analyze', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        text,
-        academicMode: academicToggle.checked,
-      }),
+    data = await res.json();
+  } catch {
+    throw new Error(`The server returned an unexpected response (${res.status}).`);
+  }
+
+  if (!res.ok) {
+    const msg = data && data.error ? data.error : `Analysis failed (${res.status}).`;
+    if (res.status === 500 && msg.includes('ANTHROPIC_API_KEY')) {
+      console.error('[ClaimCheck] Missing API key:', msg);
+      throw new Error('The analysis service is not configured. Set ANTHROPIC_API_KEY in the backend .env file.');
+    }
+    throw new Error(msg);
+  }
+  return data;
+}
+
+async function settleAnalysis() {
+  setLoading(true);
+  try {
+    const data = await currentAnalysis;
+    lastResult = {
+      v: 1,
+      claim: lastRequest.text,
+      academic: lastRequest.academic,
+      prediction: currentPrediction,
+      data,
+    };
+    saveToHistory({
+      id: Date.now(),
+      timestamp: Date.now(),
+      claim: lastRequest.text,
+      claim_text: data.claim_text || lastRequest.text,
+      verdict: normalizeVerdict(data.verdict),
+      academic: lastRequest.academic,
+      prediction: currentPrediction,
+      data,
     });
-
-    let data;
-    try {
-      data = await res.json();
-    } catch {
-      throw new Error(`The server returned an unexpected response (${res.status}).`);
-    }
-
-    if (!res.ok) {
-      const msg = data && data.error ? data.error : `Analysis failed (${res.status}).`;
-      if (res.status === 500 && msg.includes('ANTHROPIC_API_KEY')) {
-        console.error('[ClaimCheck] Missing API key:', msg);
-        throw new Error('The analysis service is not configured. Set ANTHROPIC_API_KEY in the backend .env file.');
-      }
-      throw new Error(msg);
-    }
-
-    renderResults(data);
+    renderResults(data, { prediction: currentPrediction });
     resultsEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
-
   } catch (err) {
     const msg = err.message || '';
     if (err.name === 'TypeError' || msg.toLowerCase().includes('failed to fetch')) {
@@ -74,6 +336,66 @@ async function checkClaim() {
   } finally {
     setLoading(false);
   }
+}
+
+/* ── Prediction gate ───────────────────────────────── */
+
+function showPredictPanel() {
+  currentPrediction = null;
+  for (const b of predictPanel.querySelectorAll('.predict-btn')) {
+    b.classList.remove('predict-btn--active');
+  }
+  predictPanel.hidden = false;
+  checkBtn.disabled = true;
+  predictPanel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+function onPredictionChosen(prediction) {
+  currentPrediction = prediction;
+  predictPanel.hidden = true;
+  checkBtn.disabled = false;
+  settleAnalysis();
+}
+
+/* ── Starter library ───────────────────────────────── */
+
+function buildLibrary() {
+  const frag = document.createDocumentFragment();
+  for (const group of STARTER_CLAIMS) {
+    const cat = el('div', 'library__category');
+    const label = el('p', 'library__category-label');
+    label.textContent = group.category;
+    cat.appendChild(label);
+
+    const list = el('div', 'library__claims');
+    for (const claim of group.claims) {
+      const item = el('button', 'library__claim');
+      item.type = 'button';
+      item.textContent = claim;
+      item.addEventListener('click', () => loadStarterClaim(claim));
+      list.appendChild(item);
+    }
+    cat.appendChild(list);
+    frag.appendChild(cat);
+  }
+  libraryPanel.appendChild(frag);
+}
+
+function toggleLibrary() {
+  const open = libraryPanel.hidden;
+  libraryPanel.hidden = !open;
+  libraryToggle.setAttribute('aria-expanded', String(open));
+  libraryToggle.classList.toggle('library__toggle--open', open);
+}
+
+function loadStarterClaim(text) {
+  claimInput.value = text;
+  libraryPanel.hidden = true;
+  libraryToggle.setAttribute('aria-expanded', 'false');
+  libraryToggle.classList.remove('library__toggle--open');
+  fieldError.hidden = true;
+  claimInput.focus();
+  claimInput.scrollIntoView({ behavior: 'smooth', block: 'center' });
 }
 
 /* ── State helpers ─────────────────────────────────── */
@@ -91,6 +413,9 @@ function clearAll() {
   apiErrorText.textContent = '';
   resultsEl.hidden = true;
   resultsEl.innerHTML = '';
+  predictPanel.hidden = true;
+  sharedBanner.hidden = true;
+  checkBtn.disabled = false;
 }
 
 function showFieldError(msg) {
@@ -105,9 +430,17 @@ function showApiError(msg) {
 
 /* ── Result rendering ──────────────────────────────── */
 
-function renderResults(data) {
+function renderResults(data, opts = {}) {
   resultsEl.innerHTML = '';
   resultsEl.hidden = false;
+
+  // 0. Action bar (share)
+  resultsEl.appendChild(makeActionsBar());
+
+  // 0b. Prediction recap
+  if (opts.prediction) {
+    resultsEl.appendChild(makePredictionRecap(opts.prediction, normalizeVerdict(data.verdict)));
+  }
 
   // 1. Extracted claim
   if (data.claim_text) {
@@ -363,6 +696,155 @@ function makeIdentityLensSection(lens) {
   }
 
   return sec;
+}
+
+/* ── Prediction recap ──────────────────────────────── */
+
+function makePredictionRecap(prediction, verdict) {
+  const state = predictionOutcome(prediction, verdict);
+  const sec = el('div', `section predict-recap predict-recap--${state}`);
+
+  const title = el('p', 'section-title');
+  title.textContent = 'Your Prediction vs. The Evidence';
+  sec.appendChild(title);
+
+  const row = el('div', 'predict-recap__row');
+
+  const mine = el('div', 'predict-recap__col');
+  const mineLbl = el('span', 'predict-recap__collabel');
+  mineLbl.textContent = 'You predicted';
+  const mineChip = el('span', `predict-chip predict-chip--${prediction}`);
+  mineChip.textContent = predictionLabel(prediction);
+  mine.appendChild(mineLbl);
+  mine.appendChild(mineChip);
+
+  const arrow = el('span', 'predict-recap__arrow');
+  arrow.textContent = '→';
+  arrow.setAttribute('aria-hidden', 'true');
+
+  const ev = el('div', 'predict-recap__col');
+  const evLbl = el('span', 'predict-recap__collabel');
+  evLbl.textContent = 'Evidence says';
+  const evChip = el('span', `predict-chip predict-chip--verdict-${verdict}`);
+  evChip.textContent = verdictLabel(verdict);
+  ev.appendChild(evLbl);
+  ev.appendChild(evChip);
+
+  row.appendChild(mine);
+  row.appendChild(arrow);
+  row.appendChild(ev);
+  sec.appendChild(row);
+
+  const note = el('p', 'predict-recap__note');
+  note.textContent = predictionNote(state, prediction);
+  sec.appendChild(note);
+
+  return sec;
+}
+
+function predictionOutcome(prediction, verdict) {
+  if (prediction === 'unsure' || verdict === 'unclear') return 'partial';
+  const expected = prediction === 'true' ? 'supported' : 'contradicted';
+  return verdict === expected ? 'match' : 'mismatch';
+}
+
+function predictionLabel(p) {
+  return { true: 'Likely true', false: 'Likely false', unsure: 'Not sure' }[p] || 'Not sure';
+}
+
+function predictionNote(state, prediction) {
+  if (state === 'match') {
+    return 'Your initial read lined up with the evidence. Notice what signals led you there — were they reliable reasons, or a lucky guess?';
+  }
+  if (state === 'mismatch') {
+    return 'Your initial read differed from where the evidence points. That gap is worth examining: what made the claim feel believable before you checked?';
+  }
+  if (prediction === 'unsure') {
+    return 'You held off on judging — a reasonable instinct for an unfamiliar claim. See how the evidence resolves it below.';
+  }
+  return 'You had a confident prediction, but the evidence itself is mixed or limited. Certainty in your gut does not always match the strength of available proof.';
+}
+
+/* ── Sharing ───────────────────────────────────────── */
+
+function makeActionsBar() {
+  const bar = el('div', 'results-actions');
+  const shareBtn = el('button', 'btn-share');
+  shareBtn.type = 'button';
+  shareBtn.textContent = 'Copy share link';
+  shareBtn.addEventListener('click', () => onShareClick(shareBtn));
+  bar.appendChild(shareBtn);
+  return bar;
+}
+
+async function onShareClick(btn) {
+  if (!lastResult) return;
+  let url;
+  try {
+    const encoded = encodeState(lastResult);
+    url = `${location.origin}${location.pathname}#r=${encoded}`;
+    history.replaceState(null, '', `${location.pathname}#r=${encoded}`);
+  } catch {
+    flashBtn(btn, 'Could not build link');
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(url);
+    flashBtn(btn, 'Link copied!');
+  } catch {
+    flashBtn(btn, 'Link in address bar');
+  }
+}
+
+function flashBtn(btn, msg) {
+  if (!btn.dataset.label) btn.dataset.label = btn.textContent;
+  btn.textContent = msg;
+  btn.classList.add('btn-share--done');
+  clearTimeout(btn._flashTimer);
+  btn._flashTimer = setTimeout(() => {
+    btn.textContent = btn.dataset.label;
+    btn.classList.remove('btn-share--done');
+  }, 2200);
+}
+
+function loadFromHash() {
+  const m = location.hash.match(/^#r=(.+)$/);
+  if (!m) return;
+
+  let state;
+  try {
+    state = decodeState(m[1]);
+  } catch {
+    return;
+  }
+  if (!state || typeof state !== 'object' || !state.data) return;
+
+  clearAll();
+  claimInput.value      = typeof state.claim === 'string' ? state.claim : '';
+  academicToggle.checked = Boolean(state.academic);
+  currentPrediction     = state.prediction || null;
+  lastResult            = state;
+  lastRequest           = { text: claimInput.value, academic: academicToggle.checked };
+
+  renderResults(state.data, { prediction: state.prediction });
+  sharedBanner.hidden = false;
+  resultsEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function encodeState(obj) {
+  const bytes = new TextEncoder().encode(JSON.stringify(obj));
+  let bin = '';
+  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+function decodeState(str) {
+  let b64 = str.replace(/-/g, '+').replace(/_/g, '/');
+  while (b64.length % 4) b64 += '=';
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return JSON.parse(new TextDecoder().decode(bytes));
 }
 
 /* ── Helpers ───────────────────────────────────────── */
