@@ -41,7 +41,16 @@ function loadHistory() {
   try { return JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]'); } catch { return []; }
 }
 
-function saveToHistory(entry) {
+async function saveToHistory(entry) {
+  // When signed in, persist to the user's Supabase account so history syncs
+  // across the website and the browser extension. Fall back to localStorage
+  // if the cloud save fails or the user is a guest.
+  if (window.ccAuth && window.ccAuth.isSignedIn()) {
+    try {
+      const res = await window.ccAuth.saveCheck(entry);
+      if (res && res.ok) return;
+    } catch { /* fall through to local */ }
+  }
   const list = loadHistory();
   list.unshift(entry);
   if (list.length > HISTORY_MAX) list.length = HISTORY_MAX;
@@ -57,15 +66,35 @@ function clearHistory() {
   localStorage.removeItem(HISTORY_KEY);
 }
 
+async function clearAllHistory() {
+  if (window.ccAuth && window.ccAuth.isSignedIn()) {
+    try { await window.ccAuth.clearAll(); } catch { /* ignore */ }
+    return;
+  }
+  clearHistory();
+}
+
+function historyCountText(n, signedIn) {
+  return n + ' entr' + (n === 1 ? 'y' : 'ies') + (signedIn ? ' · synced' : '');
+}
+
 historyBtn.addEventListener('click', openHistory);
 historyClose.addEventListener('click', closeHistory);
 historyModal.addEventListener('click', (e) => { if (e.target === historyModal) closeHistory(); });
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !historyModal.hidden) closeHistory(); });
 
+// Refresh the history panel when the user signs in or out so it reflects the
+// correct source (cloud vs local).
+if (window.ccAuth && typeof window.ccAuth.onChange === 'function') {
+  window.ccAuth.onChange(() => {
+    if (historyModal && !historyModal.hidden) renderHistoryList();
+  });
+}
+
 function openHistory() {
-  renderHistoryList();
   historyModal.hidden = false;
   historyClose.focus();
+  renderHistoryList();
 }
 
 function closeHistory() {
@@ -73,25 +102,59 @@ function closeHistory() {
   historyBtn.focus();
 }
 
-function renderHistoryList() {
+async function renderHistoryList() {
+  const signedIn = !!(window.ccAuth && window.ccAuth.isSignedIn());
+
+  // For signed-in users we fetch from Supabase; show a loading state while
+  // the request is in flight.
+  if (signedIn) {
+    historyListEl.innerHTML = '';
+    const loading = el('p', 'history-empty');
+    loading.textContent = 'Loading your synced checks…';
+    historyListEl.appendChild(loading);
+  }
+
+  let entries;
+  let loadError = false;
+  if (signedIn) {
+    try {
+      entries = await window.ccAuth.fetchHistory();
+    } catch {
+      loadError = true;
+      entries = [];
+    }
+    // The panel may have been closed while we were awaiting.
+    if (historyModal.hidden) return;
+  } else {
+    entries = loadHistory();
+  }
+
   historyListEl.innerHTML = '';
-  const entries = loadHistory();
+
+  if (loadError) {
+    const err = el('p', 'history-empty');
+    err.textContent = 'Could not load your synced history. Please try again.';
+    historyListEl.appendChild(err);
+    return;
+  }
 
   if (!entries.length) {
     const empty = el('p', 'history-empty');
-    empty.textContent = 'No analyses yet. Check a claim to see it here.';
+    empty.textContent = signedIn
+      ? 'No saved checks yet. Check a claim to see it here.'
+      : 'No analyses yet. Check a claim to see it here.';
     historyListEl.appendChild(empty);
     return;
   }
 
   const subhead = el('div', 'history-subhead');
   const count = el('span', 'history-count');
-  count.textContent = entries.length + ' entr' + (entries.length === 1 ? 'y' : 'ies');
+  count.textContent = historyCountText(entries.length, signedIn);
   const clearBtn = el('button', 'history-clear');
   clearBtn.type = 'button';
   clearBtn.textContent = 'Clear all';
-  clearBtn.addEventListener('click', () => {
-    clearHistory();
+  clearBtn.addEventListener('click', async () => {
+    await clearAllHistory();
     renderHistoryList();
   });
   subhead.appendChild(count);
@@ -99,11 +162,11 @@ function renderHistoryList() {
   historyListEl.appendChild(subhead);
 
   for (const entry of entries) {
-    historyListEl.appendChild(makeHistoryItem(entry));
+    historyListEl.appendChild(makeHistoryItem(entry, signedIn));
   }
 }
 
-function makeHistoryItem(entry) {
+function makeHistoryItem(entry, signedIn) {
   const wrap = el('div', 'history-item');
 
   const loadBtn = el('button', 'history-item__load');
@@ -129,17 +192,22 @@ function makeHistoryItem(entry) {
   delBtn.type = 'button';
   delBtn.setAttribute('aria-label', 'Remove this entry');
   delBtn.textContent = '×';
-  delBtn.addEventListener('click', (e) => {
+  delBtn.addEventListener('click', async (e) => {
     e.stopPropagation();
-    removeHistoryEntry(entry.id);
+    delBtn.disabled = true;
+    if (entry._cloud && window.ccAuth) {
+      try { await window.ccAuth.deleteCheck(entry.id); }
+      catch { delBtn.disabled = false; return; }
+    } else {
+      removeHistoryEntry(entry.id);
+    }
     wrap.remove();
     const remaining = historyListEl.querySelectorAll('.history-item');
     if (!remaining.length) renderHistoryList();
     else {
       const countEl = historyListEl.querySelector('.history-count');
       if (countEl) {
-        const n = remaining.length;
-        countEl.textContent = n + ' entr' + (n === 1 ? 'y' : 'ies');
+        countEl.textContent = historyCountText(remaining.length, signedIn);
       }
     }
   });
@@ -314,7 +382,7 @@ async function settleAnalysis() {
       prediction: currentPrediction,
       data,
     };
-    saveToHistory({
+    await saveToHistory({
       id: Date.now(),
       timestamp: Date.now(),
       claim: lastRequest.text,
