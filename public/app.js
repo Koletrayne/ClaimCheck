@@ -1,6 +1,11 @@
 'use strict';
 
 const claimInput    = document.getElementById('claim-input');
+const urlInput      = document.getElementById('url-input');
+const tabClaim      = document.getElementById('tab-claim');
+const tabUrl        = document.getElementById('tab-url');
+const claimPane     = document.getElementById('claim-pane');
+const urlPane       = document.getElementById('url-pane');
 const checkBtn      = document.getElementById('check-btn');
 const fieldError    = document.getElementById('field-error');
 const statusEl      = document.getElementById('status');
@@ -219,11 +224,27 @@ function makeHistoryItem(entry, signedIn) {
 function loadHistoryEntry(entry) {
   closeHistory();
   clearAll();
-  claimInput.value       = typeof entry.claim === 'string' ? entry.claim : '';
+
+  const isUrl = entry.inputType === 'url' || (!!entry.url && !entry.claim);
+  setInputMode(isUrl ? 'url' : 'claim');
+  if (isUrl) {
+    urlInput.value = typeof entry.url === 'string' ? entry.url : '';
+  } else {
+    claimInput.value = typeof entry.claim === 'string' ? entry.claim : '';
+  }
+
   academicToggle.checked = Boolean(entry.academic);
   currentPrediction      = entry.prediction || null;
-  lastResult = { v: 1, claim: entry.claim, academic: entry.academic, prediction: entry.prediction, data: entry.data };
-  lastRequest = { text: entry.claim, academic: entry.academic };
+  lastResult = {
+    v: 1,
+    mode: isUrl ? 'url' : 'claim',
+    claim: entry.claim || '',
+    url: entry.url || '',
+    academic: entry.academic,
+    prediction: entry.prediction,
+    data: entry.data,
+  };
+  lastRequest = { mode: isUrl ? 'url' : 'claim', text: entry.claim || '', url: entry.url || '', academic: entry.academic };
   renderResults(entry.data, { prediction: entry.prediction });
   resultsEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
@@ -244,7 +265,8 @@ function formatHistoryDate(ts) {
 
 let currentAnalysis  = null;   // in-flight fetch promise
 let currentPrediction = null;  // 'true' | 'false' | 'unsure' | null
-let lastRequest      = { text: '', academic: false };
+let inputMode        = 'claim'; // 'claim' | 'url'
+let lastRequest      = { mode: 'claim', text: '', url: '', academic: false };
 let lastResult       = null;   // shareable payload of the rendered analysis
 
 const STARTER_CLAIMS = [
@@ -295,11 +317,42 @@ const STARTER_CLAIMS = [
   },
 ];
 
-checkBtn.addEventListener('click', checkClaim);
+checkBtn.addEventListener('click', startCheck);
 
 claimInput.addEventListener('keydown', (e) => {
-  if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') checkClaim();
+  if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') startCheck();
 });
+
+urlInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') { e.preventDefault(); startCheck(); }
+});
+
+tabClaim.addEventListener('click', () => setInputMode('claim'));
+tabUrl.addEventListener('click', () => setInputMode('url'));
+
+function setInputMode(mode) {
+  inputMode = mode === 'url' ? 'url' : 'claim';
+  const isUrl = inputMode === 'url';
+
+  tabClaim.classList.toggle('input-tab--active', !isUrl);
+  tabUrl.classList.toggle('input-tab--active', isUrl);
+  tabClaim.setAttribute('aria-selected', String(!isUrl));
+  tabUrl.setAttribute('aria-selected', String(isUrl));
+  claimPane.hidden = isUrl;
+  urlPane.hidden = !isUrl;
+
+  checkBtn.textContent = isUrl ? 'Analyze Article' : 'Check Claim';
+  // The "predict first" gate only makes sense for a claim the user can read up
+  // front, so it is hidden in URL mode.
+  predictPanel.hidden = true;
+  fieldError.hidden = true;
+  (isUrl ? urlInput : claimInput).focus();
+}
+
+function startCheck() {
+  if (inputMode === 'url') checkUrl();
+  else checkClaim();
+}
 
 for (const btn of predictPanel.querySelectorAll('.predict-btn')) {
   btn.addEventListener('click', () => onPredictionChosen(btn.dataset.prediction));
@@ -333,7 +386,7 @@ function checkClaim() {
   }
 
   const academic = academicToggle.checked;
-  lastRequest = { text, academic };
+  lastRequest = { mode: 'claim', text, url: '', academic };
 
   // Kick off the analysis right away so the prediction step adds no latency.
   currentAnalysis = runAnalysis(text, academic);
@@ -344,6 +397,61 @@ function checkClaim() {
   } else {
     settleAnalysis();
   }
+}
+
+function checkUrl() {
+  const url = urlInput.value.trim();
+
+  clearAll();
+  currentPrediction = null;
+
+  if (!url) {
+    showFieldError('Please paste a URL to analyze.');
+    urlInput.focus();
+    return;
+  }
+  if (!isValidHttpUrl(url)) {
+    showFieldError('Please enter a valid http:// or https:// URL.');
+    urlInput.focus();
+    return;
+  }
+
+  const academic = academicToggle.checked;
+  lastRequest = { mode: 'url', text: '', url, academic };
+
+  // No prediction gate in URL mode — the user hasn't seen the claim yet.
+  currentAnalysis = runUrlAnalysis(url, academic);
+  currentAnalysis.catch(() => {});
+  settleAnalysis();
+}
+
+function isValidHttpUrl(value) {
+  try {
+    const u = new URL(value);
+    return u.protocol === 'http:' || u.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+async function runUrlAnalysis(url, academic) {
+  const res = await fetch('/analyze-url', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url, academicMode: academic }),
+  });
+
+  let data;
+  try {
+    data = await res.json();
+  } catch {
+    throw new Error(`The server returned an unexpected response (${res.status}).`);
+  }
+
+  if (!res.ok) {
+    throw new Error(data && data.error ? data.error : `Analysis failed (${res.status}).`);
+  }
+  return data;
 }
 
 async function runAnalysis(text, academic) {
@@ -375,9 +483,13 @@ async function settleAnalysis() {
   setLoading(true);
   try {
     const data = await currentAnalysis;
+    const isUrl = lastRequest.mode === 'url';
+    const article = (data && data._article) || {};
     lastResult = {
       v: 1,
+      mode: lastRequest.mode,
       claim: lastRequest.text,
+      url: lastRequest.url,
       academic: lastRequest.academic,
       prediction: currentPrediction,
       data,
@@ -385,8 +497,11 @@ async function settleAnalysis() {
     await saveToHistory({
       id: Date.now(),
       timestamp: Date.now(),
-      claim: lastRequest.text,
-      claim_text: data.claim_text || lastRequest.text,
+      inputType: lastRequest.mode,
+      claim: isUrl ? '' : lastRequest.text,
+      url: lastRequest.url,
+      articleTitle: article.title || '',
+      claim_text: data.claim_text || (isUrl ? article.title : lastRequest.text),
       verdict: normalizeVerdict(data.verdict),
       academic: lastRequest.academic,
       prediction: currentPrediction,
@@ -457,6 +572,7 @@ function toggleLibrary() {
 }
 
 function loadStarterClaim(text) {
+  setInputMode('claim');
   claimInput.value = text;
   libraryPanel.hidden = true;
   libraryToggle.setAttribute('aria-expanded', 'false');
@@ -469,9 +585,17 @@ function loadStarterClaim(text) {
 /* ── State helpers ─────────────────────────────────── */
 
 function setLoading(on) {
+  const isUrl = lastRequest.mode === 'url';
+  const statusText = document.getElementById('status-text');
+  if (statusText) {
+    statusText.textContent = isUrl
+      ? 'Reading the article and identifying claims… this can take a little longer.'
+      : 'Analyzing claim — this may take up to 30 seconds…';
+  }
   statusEl.hidden  = !on;
   checkBtn.disabled = on;
-  checkBtn.textContent = on ? 'Checking…' : 'Check Claim';
+  const idleLabel = isUrl ? 'Analyze Article' : 'Check Claim';
+  checkBtn.textContent = on ? (isUrl ? 'Analyzing…' : 'Checking…') : idleLabel;
 }
 
 function clearAll() {
@@ -502,8 +626,13 @@ function renderResults(data, opts = {}) {
   resultsEl.innerHTML = '';
   resultsEl.hidden = false;
 
-  // 0. Action bar (share)
+  // 0. Action bar (share + export)
   resultsEl.appendChild(makeActionsBar());
+
+  // 0a. Article source header (URL analyses only)
+  if (data._article && (data._article.title || data._article.url)) {
+    resultsEl.appendChild(makeArticleHeader(data._article));
+  }
 
   // 0b. Prediction recap
   if (opts.prediction) {
@@ -522,6 +651,22 @@ function renderResults(data, opts = {}) {
       p.appendChild(pill);
     }
     sec.appendChild(p);
+    resultsEl.appendChild(sec);
+  }
+
+  // 1b. Secondary claims (URL analyses may surface a few)
+  const secondary = Array.isArray(data.secondary_claims)
+    ? data.secondary_claims.filter(c => typeof c === 'string' && c.trim())
+    : [];
+  if (secondary.length) {
+    const sec = makeSection('Other Claims in the Article');
+    const list = el('ul', 'secondary-claims-list');
+    for (const c of secondary) {
+      const li = document.createElement('li');
+      li.textContent = c;
+      list.appendChild(li);
+    }
+    sec.appendChild(list);
     resultsEl.appendChild(sec);
   }
 
@@ -588,6 +733,9 @@ function renderResults(data, opts = {}) {
   if (data.identity_lens) {
     resultsEl.appendChild(makeIdentityLensSection(data.identity_lens));
   }
+
+  // 7b. Context Lens — educational background framing
+  resultsEl.appendChild(makeContextLensSection(data.contextLens || data.context_lens));
 
   // 8. Meta
   if (data._meta) {
@@ -766,6 +914,136 @@ function makeIdentityLensSection(lens) {
   return sec;
 }
 
+/* ── Context Lens ──────────────────────────────────── */
+
+function makeContextLensSection(rawLens) {
+  const lens = rawLens && typeof rawLens === 'object' ? rawLens : {};
+
+  const snapshot = strOrEmpty(lens.backgroundSnapshot);
+  const keyContext = cleanList(lens.keyContext);
+  const whyMatters = strOrEmpty(lens.whyContextMatters);
+  const missing = cleanList(lens.missingInformation);
+  const questions = cleanList(lens.reflectionQuestions);
+  const warning = strOrEmpty(lens.contextWarning);
+
+  const hasContent = snapshot || keyContext.length || whyMatters || missing.length || questions.length;
+
+  const sec = el('div', 'section context-lens');
+
+  // Expandable header so the lens feels like an optional, opt-in tool.
+  const toggle = el('button', 'context-lens__toggle');
+  toggle.type = 'button';
+  toggle.setAttribute('aria-expanded', 'false');
+
+  const icon = el('span', 'context-lens__icon');
+  icon.setAttribute('aria-hidden', 'true');
+  icon.textContent = '🔍';
+
+  const titleWrap = el('span', 'context-lens__titlewrap');
+  const title = el('span', 'context-lens__title');
+  title.textContent = 'Context Lens';
+  const sub = el('span', 'context-lens__subtitle');
+  sub.textContent = 'Background to help you judge the claim fairly';
+  titleWrap.appendChild(title);
+  titleWrap.appendChild(sub);
+
+  const chevron = el('span', 'context-lens__chevron');
+  chevron.setAttribute('aria-hidden', 'true');
+  chevron.textContent = '›';
+
+  toggle.appendChild(icon);
+  toggle.appendChild(titleWrap);
+  toggle.appendChild(chevron);
+  sec.appendChild(toggle);
+
+  const body = el('div', 'context-lens__body');
+  body.hidden = true;
+
+  if (!hasContent) {
+    const fallback = el('p', 'context-lens__fallback');
+    fallback.textContent =
+      'Context could not be generated for this claim. Try checking the claim again or adding more detail.';
+    body.appendChild(fallback);
+  } else {
+    if (warning) {
+      const warn = el('div', 'context-lens__warning');
+      const wicon = el('span', 'context-lens__warning-icon');
+      wicon.setAttribute('aria-hidden', 'true');
+      wicon.textContent = '⚠';
+      const wtext = el('span', 'context-lens__warning-text');
+      wtext.textContent = warning;
+      warn.appendChild(wicon);
+      warn.appendChild(wtext);
+      body.appendChild(warn);
+    }
+
+    if (snapshot) {
+      body.appendChild(makeContextBlock('Background Snapshot'));
+      const p = el('p', 'context-lens__paragraph');
+      p.textContent = snapshot;
+      body.appendChild(p);
+    }
+
+    if (keyContext.length) {
+      body.appendChild(makeContextBlock('Key Context'));
+      body.appendChild(makeContextList(keyContext, 'context-lens__list'));
+    }
+
+    if (whyMatters) {
+      body.appendChild(makeContextBlock('Why This Context Matters'));
+      const p = el('p', 'context-lens__paragraph');
+      p.textContent = whyMatters;
+      body.appendChild(p);
+    }
+
+    if (missing.length) {
+      body.appendChild(makeContextBlock('Missing or Needed Information'));
+      body.appendChild(makeContextList(missing, 'context-lens__list'));
+    }
+
+    if (questions.length) {
+      body.appendChild(makeContextBlock('Reflection Questions'));
+      body.appendChild(makeContextList(questions, 'context-lens__list context-lens__list--questions'));
+    }
+  }
+
+  sec.appendChild(body);
+
+  toggle.addEventListener('click', () => {
+    const open = body.hidden;
+    body.hidden = !open;
+    toggle.setAttribute('aria-expanded', String(open));
+    sec.classList.toggle('context-lens--open', open);
+  });
+
+  return sec;
+}
+
+function makeContextBlock(label) {
+  const h = el('p', 'context-lens__label');
+  h.textContent = label;
+  return h;
+}
+
+function makeContextList(items, className) {
+  const ul = el('ul', className);
+  for (const item of items) {
+    const li = document.createElement('li');
+    li.textContent = item;
+    ul.appendChild(li);
+  }
+  return ul;
+}
+
+function strOrEmpty(v) {
+  return typeof v === 'string' ? v.trim() : '';
+}
+
+function cleanList(v) {
+  if (!Array.isArray(v)) return [];
+  return v.map(x => (typeof x === 'string' ? x.trim() : '')).filter(Boolean);
+}
+
 /* ── Prediction recap ──────────────────────────────── */
 
 function makePredictionRecap(prediction, verdict) {
@@ -837,12 +1115,113 @@ function predictionNote(state, prediction) {
 
 function makeActionsBar() {
   const bar = el('div', 'results-actions');
+
   const shareBtn = el('button', 'btn-share');
   shareBtn.type = 'button';
   shareBtn.textContent = 'Copy share link';
   shareBtn.addEventListener('click', () => onShareClick(shareBtn));
   bar.appendChild(shareBtn);
+
+  const pdfBtn = el('button', 'btn-share btn-export');
+  pdfBtn.type = 'button';
+  pdfBtn.textContent = 'Export as PDF';
+  pdfBtn.addEventListener('click', () => onExportClick('pdf', pdfBtn));
+  bar.appendChild(pdfBtn);
+
+  const docxBtn = el('button', 'btn-share btn-export');
+  docxBtn.type = 'button';
+  docxBtn.textContent = 'Export as Word';
+  docxBtn.addEventListener('click', () => onExportClick('docx', docxBtn));
+  bar.appendChild(docxBtn);
+
   return bar;
+}
+
+function makeArticleHeader(article) {
+  const box = el('div', 'article-header');
+
+  const label = el('span', 'article-header__label');
+  label.textContent = 'Analyzed from';
+  box.appendChild(label);
+
+  if (article.title) {
+    const title = el('p', 'article-header__title');
+    title.textContent = article.title;
+    box.appendChild(title);
+  }
+
+  if (article.url) {
+    const src = el('a', 'article-header__source');
+    src.href = article.url;
+    src.target = '_blank';
+    src.rel = 'noopener noreferrer';
+    src.textContent = safeHostname(article.url);
+    box.appendChild(src);
+  }
+
+  return box;
+}
+
+/* ── Export (PDF / Word) ───────────────────────────── */
+
+function exportMeta() {
+  const r = lastResult || {};
+  const article = (r.data && r.data._article) || {};
+  const isUrl = r.mode === 'url';
+  return {
+    inputType: isUrl ? 'url' : 'claim',
+    originalInput: isUrl ? (r.url || '') : (r.claim || ''),
+    articleTitle: article.title || '',
+    sourceUrl: isUrl ? (r.url || article.url || '') : '',
+  };
+}
+
+async function onExportClick(format, btn) {
+  if (!lastResult || !lastResult.data) return;
+
+  if (!btn.dataset.label) btn.dataset.label = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Exporting…';
+
+  try {
+    const res = await fetch('/export', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ format, result: lastResult.data, meta: exportMeta() }),
+    });
+    if (!res.ok) throw new Error('Export failed');
+
+    const blob = await res.blob();
+    const filename = filenameFromDisposition(res.headers.get('Content-Disposition'))
+      || `ClaimCheck_Report.${format}`;
+
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1500);
+
+    btn.textContent = btn.dataset.label;
+    btn.disabled = false;
+  } catch {
+    btn.textContent = 'Export failed';
+    btn.classList.add('btn-share--error');
+    clearTimeout(btn._exportTimer);
+    btn._exportTimer = setTimeout(() => {
+      btn.textContent = btn.dataset.label;
+      btn.classList.remove('btn-share--error');
+      btn.disabled = false;
+    }, 2400);
+  }
+}
+
+function filenameFromDisposition(header) {
+  if (!header) return '';
+  const m = /filename="?([^"]+)"?/.exec(header);
+  return m ? m[1] : '';
 }
 
 async function onShareClick(btn) {
@@ -888,11 +1267,17 @@ function loadFromHash() {
   if (!state || typeof state !== 'object' || !state.data) return;
 
   clearAll();
-  claimInput.value      = typeof state.claim === 'string' ? state.claim : '';
+  const isUrl = state.mode === 'url' || (!!state.url && !state.claim);
+  setInputMode(isUrl ? 'url' : 'claim');
+  if (isUrl) {
+    urlInput.value = typeof state.url === 'string' ? state.url : '';
+  } else {
+    claimInput.value = typeof state.claim === 'string' ? state.claim : '';
+  }
   academicToggle.checked = Boolean(state.academic);
   currentPrediction     = state.prediction || null;
   lastResult            = state;
-  lastRequest           = { text: claimInput.value, academic: academicToggle.checked };
+  lastRequest           = { mode: isUrl ? 'url' : 'claim', text: isUrl ? '' : claimInput.value, url: isUrl ? urlInput.value : '', academic: academicToggle.checked };
 
   renderResults(state.data, { prediction: state.prediction });
   sharedBanner.hidden = false;

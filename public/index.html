@@ -58,16 +58,37 @@
     </div>
 
     <div class="card">
-      <textarea
-        id="claim-input"
-        class="claim-textarea"
-        placeholder='e.g. "Drinking coffee reduces the risk of type 2 diabetes."'
-        rows="5"
-        maxlength="8000"
-        aria-label="Claim to check"
-        spellcheck="true"
-      ></textarea>
-      <p class="helper-text">Paste a claim, headline, statistic, or short paragraph. Max 8,000 characters.</p>
+      <div class="input-tabs" role="tablist" aria-label="Input mode">
+        <button id="tab-claim" class="input-tab input-tab--active" type="button" role="tab" aria-selected="true" aria-controls="claim-pane">Check a Claim</button>
+        <button id="tab-url" class="input-tab" type="button" role="tab" aria-selected="false" aria-controls="url-pane">Analyze an Article URL</button>
+      </div>
+
+      <div id="claim-pane" class="input-pane" role="tabpanel" aria-labelledby="tab-claim">
+        <textarea
+          id="claim-input"
+          class="claim-textarea"
+          placeholder='e.g. "Drinking coffee reduces the risk of type 2 diabetes."'
+          rows="5"
+          maxlength="8000"
+          aria-label="Claim to check"
+          spellcheck="true"
+        ></textarea>
+        <p class="helper-text">Paste a claim, headline, statistic, or short paragraph. Max 8,000 characters.</p>
+      </div>
+
+      <div id="url-pane" class="input-pane" role="tabpanel" aria-labelledby="tab-url" hidden>
+        <input
+          id="url-input"
+          class="url-input"
+          type="url"
+          inputmode="url"
+          placeholder="https://example.com/news/article"
+          aria-label="Article URL to analyze"
+          spellcheck="false"
+          autocomplete="url"
+        />
+        <p class="helper-text">Paste a link to a news article or web page. ClaimCheck reads the page, identifies the main claim, and evaluates it.</p>
+      </div>
 
       <div id="field-error" class="field-error" hidden></div>
 
@@ -106,7 +127,7 @@
 
     <div id="status" class="status" hidden>
       <span class="spinner" aria-hidden="true"></span>
-      Analyzing claim — this may take up to 30 seconds&hellip;
+      <span id="status-text">Analyzing claim — this may take up to 30 seconds&hellip;</span>
     </div>
 
     <div id="api-error" class="error-banner" hidden>

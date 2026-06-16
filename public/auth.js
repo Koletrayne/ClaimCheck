@@ -367,6 +367,7 @@
         contradicting_evidence: Array.isArray(r.contradicting_evidence) ? r.contradicting_evidence : [],
         reflection_questions: Array.isArray(r.reflection_questions) ? r.reflection_questions : [],
         identity_lens: r.identity_lens || null,
+        context_lens: r.contextLens || r.context_lens || null,
         uncertainty_notes: r.uncertainty_notes || null,
         meta: r._meta || null,
         // Website-specific extras (ignored by the extension):
@@ -399,6 +400,7 @@
         contradicting_evidence: s.contradicting_evidence || [],
         reflection_questions: s.reflection_questions || [],
         identity_lens: s.identity_lens || null,
+        contextLens: s.context_lens || null,
         uncertainty_notes: s.uncertainty_notes || null,
         _meta: s.meta || null,
       },
