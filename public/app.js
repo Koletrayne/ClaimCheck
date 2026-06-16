@@ -15,6 +15,7 @@ const resultsEl     = document.getElementById('results');
 const academicToggle = document.getElementById('academic-toggle');
 const predictToggle  = document.getElementById('predict-toggle');
 const snapshotToggle = document.getElementById('snapshot-toggle');
+const contextToggle  = document.getElementById('context-toggle');
 const predictPanel   = document.getElementById('predict-panel');
 const sharedBanner   = document.getElementById('shared-banner');
 const dismissShared  = document.getElementById('dismiss-shared');
@@ -235,8 +236,10 @@ function loadHistoryEntry(entry) {
   }
 
   const snapshot = Boolean(entry.snapshot || (entry.data && entry.data._meta && entry.data._meta.snapshot));
+  const contextLens = resolveContextPref(entry, entry.data);
   academicToggle.checked = Boolean(entry.academic);
   snapshotToggle.checked = snapshot;
+  contextToggle.checked  = contextLens;
   checkBtn.textContent   = idleButtonLabel();
   currentPrediction      = entry.prediction || null;
   lastResult = {
@@ -246,10 +249,11 @@ function loadHistoryEntry(entry) {
     url: entry.url || '',
     academic: entry.academic,
     snapshot,
+    contextLens,
     prediction: entry.prediction,
     data: entry.data,
   };
-  lastRequest = { mode: isUrl ? 'url' : 'claim', text: entry.claim || '', url: entry.url || '', academic: entry.academic, snapshot };
+  lastRequest = { mode: isUrl ? 'url' : 'claim', text: entry.claim || '', url: entry.url || '', academic: entry.academic, snapshot, contextLens };
   renderResults(entry.data, { prediction: entry.prediction });
   resultsEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
@@ -271,7 +275,7 @@ function formatHistoryDate(ts) {
 let currentAnalysis  = null;   // in-flight fetch promise
 let currentPrediction = null;  // 'true' | 'false' | 'unsure' | null
 let inputMode        = 'claim'; // 'claim' | 'url'
-let lastRequest      = { mode: 'claim', text: '', url: '', academic: false, snapshot: false };
+let lastRequest      = { mode: 'claim', text: '', url: '', academic: false, snapshot: false, contextLens: true };
 let lastResult       = null;   // shareable payload of the rendered analysis
 
 const STARTER_CLAIMS = [
@@ -338,6 +342,15 @@ tabUrl.addEventListener('click', () => setInputMode('url'));
 // Keep the primary button label in sync with the snapshot toggle.
 snapshotToggle.addEventListener('change', () => { checkBtn.textContent = idleButtonLabel(); });
 
+// The Context Lens on/off choice is a sticky preference across sessions.
+(function initContextToggle() {
+  const saved = localStorage.getItem('contextLens');
+  if (saved !== null) contextToggle.checked = saved === 'true';
+})();
+contextToggle.addEventListener('change', () => {
+  localStorage.setItem('contextLens', String(contextToggle.checked));
+});
+
 function setInputMode(mode) {
   inputMode = mode === 'url' ? 'url' : 'claim';
   const isUrl = inputMode === 'url';
@@ -395,10 +408,11 @@ function checkClaim() {
 
   const academic = academicToggle.checked;
   const snapshot = snapshotToggle.checked;
-  lastRequest = { mode: 'claim', text, url: '', academic, snapshot };
+  const contextLens = contextToggle.checked;
+  lastRequest = { mode: 'claim', text, url: '', academic, snapshot, contextLens };
 
   // Kick off the analysis right away so the prediction step adds no latency.
-  currentAnalysis = runAnalysis(text, academic, snapshot);
+  currentAnalysis = runAnalysis(text, academic, snapshot, contextLens);
   currentAnalysis.catch(() => {}); // silence unhandled rejection; handled on await
 
   // The predict-first gate is skipped in snapshot mode — the point of a snapshot
@@ -429,10 +443,11 @@ function checkUrl() {
 
   const academic = academicToggle.checked;
   const snapshot = snapshotToggle.checked;
-  lastRequest = { mode: 'url', text: '', url, academic, snapshot };
+  const contextLens = contextToggle.checked;
+  lastRequest = { mode: 'url', text: '', url, academic, snapshot, contextLens };
 
   // No prediction gate in URL mode — the user hasn't seen the claim yet.
-  currentAnalysis = runUrlAnalysis(url, academic, snapshot);
+  currentAnalysis = runUrlAnalysis(url, academic, snapshot, contextLens);
   currentAnalysis.catch(() => {});
   settleAnalysis();
 }
@@ -446,11 +461,11 @@ function isValidHttpUrl(value) {
   }
 }
 
-async function runUrlAnalysis(url, academic, snapshot) {
+async function runUrlAnalysis(url, academic, snapshot, contextLens) {
   const res = await fetch('/analyze-url', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ url, academicMode: academic, snapshot: Boolean(snapshot) }),
+    body: JSON.stringify({ url, academicMode: academic, snapshot: Boolean(snapshot), contextLens: contextLens !== false }),
   });
 
   let data;
@@ -466,11 +481,11 @@ async function runUrlAnalysis(url, academic, snapshot) {
   return data;
 }
 
-async function runAnalysis(text, academic, snapshot) {
+async function runAnalysis(text, academic, snapshot, contextLens) {
   const res = await fetch('/analyze', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ text, academicMode: academic, snapshot: Boolean(snapshot) }),
+    body: JSON.stringify({ text, academicMode: academic, snapshot: Boolean(snapshot), contextLens: contextLens !== false }),
   });
 
   let data;
@@ -504,6 +519,7 @@ async function settleAnalysis() {
       url: lastRequest.url,
       academic: lastRequest.academic,
       snapshot: lastRequest.snapshot,
+      contextLens: lastRequest.contextLens,
       prediction: currentPrediction,
       data,
     };
@@ -518,6 +534,7 @@ async function settleAnalysis() {
       verdict: normalizeVerdict(data.verdict),
       academic: lastRequest.academic,
       snapshot: lastRequest.snapshot,
+      contextLens: lastRequest.contextLens,
       prediction: currentPrediction,
       data,
     });
@@ -785,8 +802,12 @@ function renderResults(data, opts = {}) {
     resultsEl.appendChild(makeIdentityLensSection(data.identity_lens));
   }
 
-  // 7b. Context Lens — educational background framing
-  resultsEl.appendChild(makeContextLensSection(data.contextLens || data.context_lens));
+  // 7b. Context Lens — educational background framing.
+  // Skipped when the user turned the Context Lens off for this analysis.
+  // (Older results without the _meta flag keep showing it, as before.)
+  if (!(data._meta && data._meta.context_lens === false)) {
+    resultsEl.appendChild(makeContextLensSection(data.contextLens || data.context_lens));
+  }
 
   // 8. Meta
   appendMeta(data);
@@ -910,6 +931,15 @@ function rerunAsFull(btn) {
   academicToggle.checked = Boolean(lastResult.academic);
   btn.disabled = true;
   startCheck();
+}
+
+// Work out the Context Lens preference for a saved/shared result: prefer the
+// explicit flag, fall back to what the backend recorded, default to on for older
+// entries that predate the toggle.
+function resolveContextPref(entry, data) {
+  if (entry && typeof entry.contextLens === 'boolean') return entry.contextLens;
+  if (data && data._meta && typeof data._meta.context_lens === 'boolean') return data._meta.context_lens;
+  return true;
 }
 
 function confidenceValue(raw) {
@@ -1442,12 +1472,14 @@ function loadFromHash() {
     claimInput.value = typeof state.claim === 'string' ? state.claim : '';
   }
   const snapshot = Boolean(state.snapshot || (state.data && state.data._meta && state.data._meta.snapshot));
+  const contextLens = resolveContextPref(state, state.data);
   academicToggle.checked = Boolean(state.academic);
   snapshotToggle.checked = snapshot;
+  contextToggle.checked = contextLens;
   checkBtn.textContent  = idleButtonLabel();
   currentPrediction     = state.prediction || null;
   lastResult            = state;
-  lastRequest           = { mode: isUrl ? 'url' : 'claim', text: isUrl ? '' : claimInput.value, url: isUrl ? urlInput.value : '', academic: academicToggle.checked, snapshot };
+  lastRequest           = { mode: isUrl ? 'url' : 'claim', text: isUrl ? '' : claimInput.value, url: isUrl ? urlInput.value : '', academic: academicToggle.checked, snapshot, contextLens };
 
   renderResults(state.data, { prediction: state.prediction });
   sharedBanner.hidden = false;
