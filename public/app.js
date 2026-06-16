@@ -14,6 +14,7 @@ const apiErrorText  = document.getElementById('api-error-text');
 const resultsEl     = document.getElementById('results');
 const academicToggle = document.getElementById('academic-toggle');
 const predictToggle  = document.getElementById('predict-toggle');
+const snapshotToggle = document.getElementById('snapshot-toggle');
 const predictPanel   = document.getElementById('predict-panel');
 const sharedBanner   = document.getElementById('shared-banner');
 const dismissShared  = document.getElementById('dismiss-shared');
@@ -233,7 +234,10 @@ function loadHistoryEntry(entry) {
     claimInput.value = typeof entry.claim === 'string' ? entry.claim : '';
   }
 
+  const snapshot = Boolean(entry.snapshot || (entry.data && entry.data._meta && entry.data._meta.snapshot));
   academicToggle.checked = Boolean(entry.academic);
+  snapshotToggle.checked = snapshot;
+  checkBtn.textContent   = idleButtonLabel();
   currentPrediction      = entry.prediction || null;
   lastResult = {
     v: 1,
@@ -241,10 +245,11 @@ function loadHistoryEntry(entry) {
     claim: entry.claim || '',
     url: entry.url || '',
     academic: entry.academic,
+    snapshot,
     prediction: entry.prediction,
     data: entry.data,
   };
-  lastRequest = { mode: isUrl ? 'url' : 'claim', text: entry.claim || '', url: entry.url || '', academic: entry.academic };
+  lastRequest = { mode: isUrl ? 'url' : 'claim', text: entry.claim || '', url: entry.url || '', academic: entry.academic, snapshot };
   renderResults(entry.data, { prediction: entry.prediction });
   resultsEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
@@ -266,7 +271,7 @@ function formatHistoryDate(ts) {
 let currentAnalysis  = null;   // in-flight fetch promise
 let currentPrediction = null;  // 'true' | 'false' | 'unsure' | null
 let inputMode        = 'claim'; // 'claim' | 'url'
-let lastRequest      = { mode: 'claim', text: '', url: '', academic: false };
+let lastRequest      = { mode: 'claim', text: '', url: '', academic: false, snapshot: false };
 let lastResult       = null;   // shareable payload of the rendered analysis
 
 const STARTER_CLAIMS = [
@@ -330,6 +335,9 @@ urlInput.addEventListener('keydown', (e) => {
 tabClaim.addEventListener('click', () => setInputMode('claim'));
 tabUrl.addEventListener('click', () => setInputMode('url'));
 
+// Keep the primary button label in sync with the snapshot toggle.
+snapshotToggle.addEventListener('change', () => { checkBtn.textContent = idleButtonLabel(); });
+
 function setInputMode(mode) {
   inputMode = mode === 'url' ? 'url' : 'claim';
   const isUrl = inputMode === 'url';
@@ -341,7 +349,7 @@ function setInputMode(mode) {
   claimPane.hidden = isUrl;
   urlPane.hidden = !isUrl;
 
-  checkBtn.textContent = isUrl ? 'Analyze Article' : 'Check Claim';
+  checkBtn.textContent = idleButtonLabel();
   // The "predict first" gate only makes sense for a claim the user can read up
   // front, so it is hidden in URL mode.
   predictPanel.hidden = true;
@@ -386,13 +394,16 @@ function checkClaim() {
   }
 
   const academic = academicToggle.checked;
-  lastRequest = { mode: 'claim', text, url: '', academic };
+  const snapshot = snapshotToggle.checked;
+  lastRequest = { mode: 'claim', text, url: '', academic, snapshot };
 
   // Kick off the analysis right away so the prediction step adds no latency.
-  currentAnalysis = runAnalysis(text, academic);
+  currentAnalysis = runAnalysis(text, academic, snapshot);
   currentAnalysis.catch(() => {}); // silence unhandled rejection; handled on await
 
-  if (predictToggle.checked) {
+  // The predict-first gate is skipped in snapshot mode — the point of a snapshot
+  // is a quick rundown, not a reflection exercise.
+  if (predictToggle.checked && !snapshot) {
     showPredictPanel();
   } else {
     settleAnalysis();
@@ -417,10 +428,11 @@ function checkUrl() {
   }
 
   const academic = academicToggle.checked;
-  lastRequest = { mode: 'url', text: '', url, academic };
+  const snapshot = snapshotToggle.checked;
+  lastRequest = { mode: 'url', text: '', url, academic, snapshot };
 
   // No prediction gate in URL mode — the user hasn't seen the claim yet.
-  currentAnalysis = runUrlAnalysis(url, academic);
+  currentAnalysis = runUrlAnalysis(url, academic, snapshot);
   currentAnalysis.catch(() => {});
   settleAnalysis();
 }
@@ -434,11 +446,11 @@ function isValidHttpUrl(value) {
   }
 }
 
-async function runUrlAnalysis(url, academic) {
+async function runUrlAnalysis(url, academic, snapshot) {
   const res = await fetch('/analyze-url', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ url, academicMode: academic }),
+    body: JSON.stringify({ url, academicMode: academic, snapshot: Boolean(snapshot) }),
   });
 
   let data;
@@ -454,11 +466,11 @@ async function runUrlAnalysis(url, academic) {
   return data;
 }
 
-async function runAnalysis(text, academic) {
+async function runAnalysis(text, academic, snapshot) {
   const res = await fetch('/analyze', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ text, academicMode: academic }),
+    body: JSON.stringify({ text, academicMode: academic, snapshot: Boolean(snapshot) }),
   });
 
   let data;
@@ -491,6 +503,7 @@ async function settleAnalysis() {
       claim: lastRequest.text,
       url: lastRequest.url,
       academic: lastRequest.academic,
+      snapshot: lastRequest.snapshot,
       prediction: currentPrediction,
       data,
     };
@@ -504,6 +517,7 @@ async function settleAnalysis() {
       claim_text: data.claim_text || (isUrl ? article.title : lastRequest.text),
       verdict: normalizeVerdict(data.verdict),
       academic: lastRequest.academic,
+      snapshot: lastRequest.snapshot,
       prediction: currentPrediction,
       data,
     });
@@ -586,16 +600,28 @@ function loadStarterClaim(text) {
 
 function setLoading(on) {
   const isUrl = lastRequest.mode === 'url';
+  const isSnapshot = lastRequest.snapshot;
   const statusText = document.getElementById('status-text');
   if (statusText) {
-    statusText.textContent = isUrl
-      ? 'Reading the article and identifying claims… this can take a little longer.'
-      : 'Analyzing claim — this may take up to 30 seconds…';
+    if (isSnapshot) {
+      statusText.textContent = isUrl
+        ? 'Reading the article for a quick snapshot…'
+        : 'Pulling together a quick snapshot…';
+    } else {
+      statusText.textContent = isUrl
+        ? 'Reading the article and identifying claims… this can take a little longer.'
+        : 'Analyzing claim — this may take up to 30 seconds…';
+    }
   }
   statusEl.hidden  = !on;
   checkBtn.disabled = on;
-  const idleLabel = isUrl ? 'Analyze Article' : 'Check Claim';
-  checkBtn.textContent = on ? (isUrl ? 'Analyzing…' : 'Checking…') : idleLabel;
+  const idleLabel = idleButtonLabel();
+  checkBtn.textContent = on ? (isSnapshot ? 'Snapshotting…' : (isUrl ? 'Analyzing…' : 'Checking…')) : idleLabel;
+}
+
+function idleButtonLabel() {
+  if (snapshotToggle.checked) return inputMode === 'url' ? 'Quick Snapshot' : 'Quick Snapshot';
+  return inputMode === 'url' ? 'Analyze Article' : 'Check Claim';
 }
 
 function clearAll() {
@@ -637,6 +663,31 @@ function renderResults(data, opts = {}) {
   // 0b. Prediction recap
   if (opts.prediction) {
     resultsEl.appendChild(makePredictionRecap(opts.prediction, normalizeVerdict(data.verdict)));
+  }
+
+  // 0c. Snapshot summary card — the at-a-glance rundown, shown in every mode.
+  const isSnapshot = !!(data._meta && data._meta.snapshot);
+  resultsEl.appendChild(makeSnapshotCard(data, isSnapshot));
+
+  // In snapshot mode we keep things to a quick rundown: the card above plus the
+  // strongest evidence, with a one-click upgrade to the full analysis.
+  if (isSnapshot) {
+    resultsEl.appendChild(makeEvidenceSection(
+      'Supporting Evidence',
+      Array.isArray(data.supporting_evidence) ? data.supporting_evidence : []
+    ));
+    resultsEl.appendChild(makeEvidenceSection(
+      'Contradicting Evidence',
+      Array.isArray(data.contradicting_evidence) ? data.contradicting_evidence : []
+    ));
+    // Surface identity concerns even in snapshot mode, but only when flagged.
+    if (data.identity_lens && (data.identity_lens.targets_identity ||
+        (Array.isArray(data.identity_lens.patterns_observed) && data.identity_lens.patterns_observed.length))) {
+      resultsEl.appendChild(makeIdentityLensSection(data.identity_lens));
+    }
+    resultsEl.appendChild(makeRunFullButton());
+    appendMeta(data);
+    return;
   }
 
   // 1. Extracted claim
@@ -738,20 +789,136 @@ function renderResults(data, opts = {}) {
   resultsEl.appendChild(makeContextLensSection(data.contextLens || data.context_lens));
 
   // 8. Meta
-  if (data._meta) {
-    const parts = [];
-    if (data._meta.model) parts.push('Model: ' + data._meta.model);
-    if (data._meta.searches_used != null) {
-      const n = data._meta.searches_used;
-      parts.push(n + ' web search' + (n === 1 ? '' : 'es'));
-    }
-    if (data._meta.academic_mode) parts.push('Academic mode');
-    if (parts.length) {
-      const meta = el('p', 'meta-row');
-      meta.textContent = parts.join(' · ');
-      resultsEl.appendChild(meta);
-    }
+  appendMeta(data);
+}
+
+function appendMeta(data) {
+  if (!data._meta) return;
+  const parts = [];
+  if (data._meta.model) parts.push('Model: ' + data._meta.model);
+  if (data._meta.searches_used != null) {
+    const n = data._meta.searches_used;
+    parts.push(n + ' web search' + (n === 1 ? '' : 'es'));
   }
+  if (data._meta.academic_mode) parts.push('Academic mode');
+  if (data._meta.snapshot) parts.push('Snapshot');
+  if (parts.length) {
+    const meta = el('p', 'meta-row');
+    meta.textContent = parts.join(' · ');
+    resultsEl.appendChild(meta);
+  }
+}
+
+/* ── Snapshot summary ──────────────────────────────── */
+
+function makeSnapshotCard(data, isSnapshot) {
+  const v = normalizeVerdict(data.verdict);
+  const card = el('div', `snapshot-card snapshot-card--${v}`);
+
+  const head = el('div', 'snapshot-card__head');
+  const label = el('span', 'snapshot-card__label');
+  label.textContent = isSnapshot ? 'Quick Snapshot' : 'Snapshot';
+  head.appendChild(label);
+
+  const badges = el('div', 'snapshot-card__badges');
+  const badge = el('span', 'verdict-badge');
+  badge.textContent = verdictLabel(v);
+  badges.appendChild(badge);
+  const conf = confidenceValue(data.confidence);
+  if (conf) {
+    const cpill = el('span', `confidence-pill confidence-pill--${conf}`);
+    cpill.textContent = confidenceLabel(conf) + ' confidence';
+    cpill.title = 'How confident ClaimCheck is in this verdict given the evidence found.';
+    badges.appendChild(cpill);
+  }
+  head.appendChild(badges);
+  card.appendChild(head);
+
+  if (data.claim_text) {
+    const claim = el('p', 'snapshot-card__claim');
+    claim.textContent = data.claim_text;
+    card.appendChild(claim);
+  }
+
+  const takeaway = strOrEmpty(data.verdict_explanation) || verdictSummaryTitle(v);
+  if (takeaway) {
+    const t = el('p', 'snapshot-card__takeaway');
+    t.textContent = takeaway;
+    card.appendChild(t);
+  }
+
+  const concern = deriveConcern(data);
+  const flag = el('div', `snapshot-flag snapshot-flag--${concern.level}`);
+  const ficon = el('span', 'snapshot-flag__icon');
+  ficon.setAttribute('aria-hidden', 'true');
+  ficon.textContent = concern.level === 'warn' ? '⚠' : '✓';
+  const ftext = el('span', 'snapshot-flag__text');
+  ftext.textContent = concern.text;
+  flag.appendChild(ficon);
+  flag.appendChild(ftext);
+  card.appendChild(flag);
+
+  const sCount = Array.isArray(data.supporting_evidence) ? data.supporting_evidence.length : 0;
+  const cCount = Array.isArray(data.contradicting_evidence) ? data.contradicting_evidence.length : 0;
+  const fp = [sCount + ' supporting', cCount + ' contradicting'];
+  if (data._meta && data._meta.searches_used != null) {
+    fp.push(data._meta.searches_used + ' search' + (data._meta.searches_used === 1 ? '' : 'es'));
+  }
+  const foot = el('p', 'snapshot-card__foot');
+  foot.textContent = fp.join(' · ');
+  card.appendChild(foot);
+
+  return card;
+}
+
+function deriveConcern(data) {
+  const lens = data.identity_lens || {};
+  const flagged = Boolean(lens.targets_identity) ||
+    (Array.isArray(lens.patterns_observed) && lens.patterns_observed.length > 0);
+  if (flagged) {
+    return { level: 'warn', text: 'Identity-targeting language flagged — see the Identity Lens.' };
+  }
+  const ctx = data.contextLens || data.context_lens || {};
+  const warn = strOrEmpty(ctx.contextWarning);
+  if (warn) return { level: 'warn', text: warn };
+  return { level: 'ok', text: 'No identity-targeting or major concern flags.' };
+}
+
+function makeRunFullButton() {
+  const wrap = el('div', 'snapshot-upgrade');
+  const note = el('p', 'snapshot-upgrade__note');
+  note.textContent = 'Want the full picture — breakdown, all sources, context, and reflection questions?';
+  const btn = el('button', 'btn-primary snapshot-upgrade__btn');
+  btn.type = 'button';
+  btn.textContent = 'Run full analysis';
+  btn.addEventListener('click', () => rerunAsFull(btn));
+  wrap.appendChild(note);
+  wrap.appendChild(btn);
+  return wrap;
+}
+
+function rerunAsFull(btn) {
+  if (!lastResult) return;
+  snapshotToggle.checked = false;
+  if (lastResult.mode === 'url') {
+    setInputMode('url');
+    urlInput.value = lastResult.url || '';
+  } else {
+    setInputMode('claim');
+    claimInput.value = lastResult.claim || '';
+  }
+  academicToggle.checked = Boolean(lastResult.academic);
+  btn.disabled = true;
+  startCheck();
+}
+
+function confidenceValue(raw) {
+  const c = String(raw || '').trim().toLowerCase();
+  return (c === 'high' || c === 'medium' || c === 'low') ? c : '';
+}
+
+function confidenceLabel(c) {
+  return { high: 'High', medium: 'Medium', low: 'Low' }[c] || '';
 }
 
 /* ── Section builders ──────────────────────────────── */
@@ -1274,10 +1441,13 @@ function loadFromHash() {
   } else {
     claimInput.value = typeof state.claim === 'string' ? state.claim : '';
   }
+  const snapshot = Boolean(state.snapshot || (state.data && state.data._meta && state.data._meta.snapshot));
   academicToggle.checked = Boolean(state.academic);
+  snapshotToggle.checked = snapshot;
+  checkBtn.textContent  = idleButtonLabel();
   currentPrediction     = state.prediction || null;
   lastResult            = state;
-  lastRequest           = { mode: isUrl ? 'url' : 'claim', text: isUrl ? '' : claimInput.value, url: isUrl ? urlInput.value : '', academic: academicToggle.checked };
+  lastRequest           = { mode: isUrl ? 'url' : 'claim', text: isUrl ? '' : claimInput.value, url: isUrl ? urlInput.value : '', academic: academicToggle.checked, snapshot };
 
   renderResults(state.data, { prediction: state.prediction });
   sharedBanner.hidden = false;

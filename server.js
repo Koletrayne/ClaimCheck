@@ -64,7 +64,7 @@ app.get('/health', (req, res) => {
 });
 
 app.post('/analyze', async (req, res) => {
-  const { text, sourceUrl, academicMode } = req.body || {};
+  const { text, sourceUrl, academicMode, snapshot } = req.body || {};
 
   if (typeof text !== 'string' || text.trim().length < 8) {
     return res.status(400).json({
@@ -85,7 +85,7 @@ app.post('/analyze', async (req, res) => {
   }
 
   try {
-    const result = await analyzeClaim({ text, sourceUrl, academicMode: Boolean(academicMode) });
+    const result = await analyzeClaim({ text, sourceUrl, academicMode: Boolean(academicMode), snapshot: Boolean(snapshot) });
     res.json(result);
   } catch (err) {
     console.error('[analyze] failed:', err);
@@ -96,7 +96,7 @@ app.post('/analyze', async (req, res) => {
 });
 
 app.post('/analyze-url', urlRateLimiter, async (req, res) => {
-  const { url, academicMode } = req.body || {};
+  const { url, academicMode, snapshot } = req.body || {};
 
   if (typeof url !== 'string' || !url.trim()) {
     return res.status(400).json({ error: 'Provide a URL to analyze.' });
@@ -130,6 +130,7 @@ app.post('/analyze-url', urlRateLimiter, async (req, res) => {
       sourceUrl: article.url,
       academicMode: Boolean(academicMode),
       includeSecondaryClaims: true,
+      snapshot: Boolean(snapshot),
     });
     result._article = {
       title: article.title,
