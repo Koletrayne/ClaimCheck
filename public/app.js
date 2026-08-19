@@ -26,6 +26,48 @@ const historyBtn     = document.getElementById('history-btn');
 const historyModal   = document.getElementById('history-modal');
 const historyClose   = document.getElementById('history-close');
 const historyListEl  = document.getElementById('history-list');
+const langSelect     = document.getElementById('lang-select');
+
+/* ── Classroom Mode ────────────────────────────────── */
+// Set by public/classroom/room.js BEFORE this file loads, and absent on the
+// public homepage. Every use below is gated on it, so when it is null this file
+// behaves exactly as it did before Classroom Mode existed.
+//
+// Its presence changes three things: analyses go to the classroom endpoints
+// with the anonymous session token attached, nothing is written to history or
+// the cloud, and shared-result links are ignored.
+const CLASSROOM = window.ccClassroom || null;
+
+/* ── Localization ──────────────────────────────────── */
+// Thin wrappers over the shared i18n core so call sites stay terse.
+const t     = (key, params) => window.ccI18n.t(key, params);
+const tList = (key) => window.ccI18n.tList(key);
+
+// The active language ('en' | 'es'), validated by the i18n core. Sent to the
+// backend so the AI analysis is generated in the same language, and stored on
+// each result/history entry so shared links and exports stay coherent.
+let currentLang = window.ccI18n.getLang();
+
+(function initLangSelect() {
+  if (langSelect) {
+    langSelect.value = currentLang;
+    langSelect.addEventListener('change', () => window.ccI18n.setLang(langSelect.value));
+  }
+})();
+
+// When the language changes: keep the selector in sync, refresh dynamic strings,
+// and re-render whatever is currently on screen so the switch is instant and the
+// user keeps their work (the AI text stays as generated; re-run to translate it).
+window.ccI18n.onChange((lang) => {
+  currentLang = lang;
+  if (langSelect && langSelect.value !== lang) langSelect.value = lang;
+  checkBtn.textContent = idleButtonLabel();
+  rebuildLibrary();
+  if (lastResult && lastResult.data && !resultsEl.hidden) {
+    renderResults(lastResult.data, { prediction: currentPrediction });
+  }
+  if (historyModal && !historyModal.hidden) renderHistoryList();
+});
 
 (function initTheme() {
   const saved = localStorage.getItem('theme');
@@ -49,6 +91,11 @@ function loadHistory() {
 }
 
 async function saveToHistory(entry) {
+  // Classroom Mode keeps no record of what students check — not in the cloud,
+  // not in localStorage. This early return is the single point that guarantees
+  // it for every analysis path, so do not move the check further down.
+  if (CLASSROOM) return;
+
   // When signed in, persist to the user's Supabase account so history syncs
   // across the website and the browser extension. Fall back to localStorage
   // if the cloud save fails or the user is a guest.
@@ -82,7 +129,8 @@ async function clearAllHistory() {
 }
 
 function historyCountText(n, signedIn) {
-  return n + ' entr' + (n === 1 ? 'y' : 'ies') + (signedIn ? ' · synced' : '');
+  const count = t(n === 1 ? 'history.countOne' : 'history.countOther', { n });
+  return count + (signedIn ? t('history.syncedSuffix') : '');
 }
 
 historyBtn.addEventListener('click', openHistory);
@@ -117,7 +165,7 @@ async function renderHistoryList() {
   if (signedIn) {
     historyListEl.innerHTML = '';
     const loading = el('p', 'history-empty');
-    loading.textContent = 'Loading your synced checks…';
+    loading.textContent = t('history.loading');
     historyListEl.appendChild(loading);
   }
 
@@ -140,16 +188,14 @@ async function renderHistoryList() {
 
   if (loadError) {
     const err = el('p', 'history-empty');
-    err.textContent = 'Could not load your synced history. Please try again.';
+    err.textContent = t('history.loadError');
     historyListEl.appendChild(err);
     return;
   }
 
   if (!entries.length) {
     const empty = el('p', 'history-empty');
-    empty.textContent = signedIn
-      ? 'No saved checks yet. Check a claim to see it here.'
-      : 'No analyses yet. Check a claim to see it here.';
+    empty.textContent = signedIn ? t('history.emptySignedIn') : t('history.emptyGuest');
     historyListEl.appendChild(empty);
     return;
   }
@@ -159,7 +205,7 @@ async function renderHistoryList() {
   count.textContent = historyCountText(entries.length, signedIn);
   const clearBtn = el('button', 'history-clear');
   clearBtn.type = 'button';
-  clearBtn.textContent = 'Clear all';
+  clearBtn.textContent = t('history.clearAll');
   clearBtn.addEventListener('click', async () => {
     await clearAllHistory();
     renderHistoryList();
@@ -197,7 +243,7 @@ function makeHistoryItem(entry, signedIn) {
 
   const delBtn = el('button', 'history-item__delete');
   delBtn.type = 'button';
-  delBtn.setAttribute('aria-label', 'Remove this entry');
+  delBtn.setAttribute('aria-label', t('history.remove'));
   delBtn.textContent = '×';
   delBtn.addEventListener('click', async (e) => {
     e.stopPropagation();
@@ -227,6 +273,12 @@ function loadHistoryEntry(entry) {
   closeHistory();
   clearAll();
 
+  // Show the analysis in the language it was generated in, so the UI chrome
+  // matches the AI content the entry contains.
+  const storedLang = entry.language || (entry.data && entry.data._meta && entry.data._meta.language);
+  const entryLang = window.ccI18n.isSupported(storedLang) ? storedLang : currentLang;
+  if (entryLang !== currentLang) window.ccI18n.setLang(entryLang);
+
   const isUrl = entry.inputType === 'url' || (!!entry.url && !entry.claim);
   setInputMode(isUrl ? 'url' : 'claim');
   if (isUrl) {
@@ -250,10 +302,11 @@ function loadHistoryEntry(entry) {
     academic: entry.academic,
     snapshot,
     contextLens,
+    language: entryLang,
     prediction: entry.prediction,
     data: entry.data,
   };
-  lastRequest = { mode: isUrl ? 'url' : 'claim', text: entry.claim || '', url: entry.url || '', academic: entry.academic, snapshot, contextLens };
+  lastRequest = { mode: isUrl ? 'url' : 'claim', text: entry.claim || '', url: entry.url || '', academic: entry.academic, snapshot, contextLens, language: entryLang };
   renderResults(entry.data, { prediction: entry.prediction });
   resultsEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
@@ -261,70 +314,35 @@ function loadHistoryEntry(entry) {
 function formatHistoryDate(ts) {
   const d   = new Date(ts);
   const now = new Date();
+  const loc = window.ccI18n.locale();
   const diffMs   = now - d;
   const diffMins = Math.floor(diffMs / 60000);
   const diffDays = Math.floor(diffMs / 86400000);
-  if (diffMins < 1)  return 'Just now';
-  if (diffMins < 60) return diffMins + 'm ago';
-  if (diffDays === 0) return 'Today ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  if (diffDays === 1) return 'Yesterday';
-  if (diffDays < 7)  return diffDays + ' days ago';
-  return d.toLocaleDateString([], { month: 'short', day: 'numeric' });
+  if (diffMins < 1)  return t('history.justNow');
+  if (diffMins < 60) return t('history.minutesAgo', { n: diffMins });
+  if (diffDays === 0) return t('history.today', { time: d.toLocaleTimeString(loc, { hour: '2-digit', minute: '2-digit' }) });
+  if (diffDays === 1) return t('history.yesterday');
+  if (diffDays < 7)  return t('history.daysAgo', { n: diffDays });
+  return d.toLocaleDateString(loc, { month: 'short', day: 'numeric' });
 }
 
 let currentAnalysis  = null;   // in-flight fetch promise
 let currentPrediction = null;  // 'true' | 'false' | 'unsure' | null
 let inputMode        = 'claim'; // 'claim' | 'url'
-let lastRequest      = { mode: 'claim', text: '', url: '', academic: false, snapshot: false, contextLens: true };
+let lastRequest      = { mode: 'claim', text: '', url: '', academic: false, snapshot: false, contextLens: true, language: currentLang };
 let lastResult       = null;   // shareable payload of the rendered analysis
 
-const STARTER_CLAIMS = [
-  {
-    category: 'Science & Nature',
-    claims: [
-      'Lightning never strikes the same place twice.',
-      'The Great Wall of China is visible from space with the naked eye.',
-      'Antibiotics are an effective treatment for viral infections like the common cold.',
-      'A goldfish has a memory span of only three seconds.',
-    ],
-  },
-  {
-    category: 'Health & Nutrition',
-    claims: [
-      'Eating carrots significantly improves your night vision.',
-      'You must drink eight glasses of water a day to stay healthy.',
-      'Vitamin C supplements prevent the common cold.',
-      'Vaccines cause autism.',
-    ],
-  },
-  {
-    category: 'History & Society',
-    claims: [
-      'Napoleon Bonaparte was unusually short for his time.',
-      'Humans only use 10 percent of their brains.',
-      'People convicted in the Salem witch trials were burned at the stake.',
-      'Albert Einstein failed mathematics as a student.',
-    ],
-  },
-  {
-    category: 'Media & Technology',
-    claims: [
-      "A browser's incognito mode makes your web activity completely anonymous.",
-      '5G mobile networks spread the COVID-19 virus.',
-      'Charging your phone overnight permanently damages the battery.',
-      'A higher megapixel count always means a better camera.',
-    ],
-  },
-  {
-    category: 'Civic & Environment',
-    claims: [
-      'The United States incarcerates more people than any other country.',
-      'In many markets, newly built solar and wind power is now cheaper than new coal or gas.',
-      'Recycling alone can solve the ocean plastic pollution crisis.',
-      'Electric cars produce zero emissions over their full lifecycle.',
-    ],
-  },
-];
+// Starter examples are pulled from the active locale so they can be shown in the
+// user's language. Adding a category is a locale-file change; the keys here are
+// the stable category identifiers shared across all locales.
+const STARTER_CATEGORIES = ['science', 'health', 'history', 'media', 'civic'];
+
+function starterGroups() {
+  return STARTER_CATEGORIES.map((key) => ({
+    category: t('library.categories.' + key),
+    claims: tList('library.claims.' + key),
+  }));
+}
 
 checkBtn.addEventListener('click', startCheck);
 
@@ -396,12 +414,12 @@ function checkClaim() {
   currentPrediction = null;
 
   if (!text) {
-    showFieldError('Please enter a claim to check.');
+    showFieldError(t('errors.claimEmpty'));
     claimInput.focus();
     return;
   }
   if (text.length < 8) {
-    showFieldError('Please enter at least a few words to analyze.');
+    showFieldError(t('errors.claimShort'));
     claimInput.focus();
     return;
   }
@@ -409,10 +427,11 @@ function checkClaim() {
   const academic = academicToggle.checked;
   const snapshot = snapshotToggle.checked;
   const contextLens = contextToggle.checked;
-  lastRequest = { mode: 'claim', text, url: '', academic, snapshot, contextLens };
+  const language = currentLang;
+  lastRequest = { mode: 'claim', text, url: '', academic, snapshot, contextLens, language };
 
   // Kick off the analysis right away so the prediction step adds no latency.
-  currentAnalysis = runAnalysis(text, academic, snapshot, contextLens);
+  currentAnalysis = runAnalysis(text, academic, snapshot, contextLens, language);
   currentAnalysis.catch(() => {}); // silence unhandled rejection; handled on await
 
   // The predict-first gate is skipped in snapshot mode — the point of a snapshot
@@ -431,12 +450,12 @@ function checkUrl() {
   currentPrediction = null;
 
   if (!url) {
-    showFieldError('Please paste a URL to analyze.');
+    showFieldError(t('errors.urlEmpty'));
     urlInput.focus();
     return;
   }
   if (!isValidHttpUrl(url)) {
-    showFieldError('Please enter a valid http:// or https:// URL.');
+    showFieldError(t('errors.urlInvalid'));
     urlInput.focus();
     return;
   }
@@ -444,10 +463,11 @@ function checkUrl() {
   const academic = academicToggle.checked;
   const snapshot = snapshotToggle.checked;
   const contextLens = contextToggle.checked;
-  lastRequest = { mode: 'url', text: '', url, academic, snapshot, contextLens };
+  const language = currentLang;
+  lastRequest = { mode: 'url', text: '', url, academic, snapshot, contextLens, language };
 
   // No prediction gate in URL mode — the user hasn't seen the claim yet.
-  currentAnalysis = runUrlAnalysis(url, academic, snapshot, contextLens);
+  currentAnalysis = runUrlAnalysis(url, academic, snapshot, contextLens, language);
   currentAnalysis.catch(() => {});
   settleAnalysis();
 }
@@ -461,48 +481,80 @@ function isValidHttpUrl(value) {
   }
 }
 
-async function runUrlAnalysis(url, academic, snapshot, contextLens) {
-  const res = await fetch('/analyze-url', {
+/**
+ * Endpoint and headers for an analysis request.
+ *
+ * In Classroom Mode the request goes to the classroom endpoints and carries the
+ * anonymous session token. The token identifies the classroom, never a student,
+ * and the API key stays on the server in both modes — the browser never talks
+ * to an AI provider directly.
+ */
+function analysisRequest(path) {
+  const headers = { 'Content-Type': 'application/json' };
+  if (!CLASSROOM) return { url: path, headers };
+  headers['X-Classroom-Session'] = CLASSROOM.token;
+  return { url: `/api/classroom${path}`, headers };
+}
+
+/** Hands the classroom UI its budget meter and any PII warning. */
+function reportClassroomMeta(data) {
+  if (CLASSROOM && data && data._classroom && typeof CLASSROOM.onResult === 'function') {
+    CLASSROOM.onResult(data._classroom);
+  }
+}
+
+async function runUrlAnalysis(url, academic, snapshot, contextLens, language) {
+  const req = analysisRequest('/analyze-url');
+  const res = await fetch(req.url, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ url, academicMode: academic, snapshot: Boolean(snapshot), contextLens: contextLens !== false }),
+    headers: req.headers,
+    body: JSON.stringify({ url, academicMode: academic, snapshot: Boolean(snapshot), contextLens: contextLens !== false, language }),
   });
 
   let data;
   try {
     data = await res.json();
   } catch {
-    throw new Error(`The server returned an unexpected response (${res.status}).`);
+    throw new Error(t('errors.unexpectedResponse', { status: res.status }));
   }
 
   if (!res.ok) {
-    throw new Error(data && data.error ? data.error : `Analysis failed (${res.status}).`);
+    throw new Error(data && data.error ? data.error : t('errors.analysisFailed', { status: res.status }));
   }
+  reportClassroomMeta(data);
   return data;
 }
 
-async function runAnalysis(text, academic, snapshot, contextLens) {
-  const res = await fetch('/analyze', {
+async function runAnalysis(text, academic, snapshot, contextLens, language) {
+  const req = analysisRequest('/analyze');
+  const res = await fetch(req.url, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ text, academicMode: academic, snapshot: Boolean(snapshot), contextLens: contextLens !== false }),
+    headers: req.headers,
+    body: JSON.stringify({ text, academicMode: academic, snapshot: Boolean(snapshot), contextLens: contextLens !== false, language }),
   });
 
   let data;
   try {
     data = await res.json();
   } catch {
-    throw new Error(`The server returned an unexpected response (${res.status}).`);
+    throw new Error(t('errors.unexpectedResponse', { status: res.status }));
   }
 
   if (!res.ok) {
-    const msg = data && data.error ? data.error : `Analysis failed (${res.status}).`;
+    const msg = data && data.error ? data.error : t('errors.analysisFailed', { status: res.status });
     if (res.status === 500 && msg.includes('ANTHROPIC_API_KEY')) {
       console.error('[ClaimCheck] Missing API key:', msg);
-      throw new Error('The analysis service is not configured. Set ANTHROPIC_API_KEY in the backend .env file.');
+      throw new Error(t('errors.notConfigured'));
+    }
+    // A classroom that ended, was closed, or ran out of allowance mid-lesson
+    // needs the student sent back to the join page rather than shown a retry.
+    if (CLASSROOM && typeof CLASSROOM.onSessionError === 'function' &&
+        (res.status === 401 || res.status === 403)) {
+      CLASSROOM.onSessionError(data && data.code, msg);
     }
     throw new Error(msg);
   }
+  reportClassroomMeta(data);
   return data;
 }
 
@@ -520,6 +572,7 @@ async function settleAnalysis() {
       academic: lastRequest.academic,
       snapshot: lastRequest.snapshot,
       contextLens: lastRequest.contextLens,
+      language: lastRequest.language,
       prediction: currentPrediction,
       data,
     };
@@ -535,6 +588,7 @@ async function settleAnalysis() {
       academic: lastRequest.academic,
       snapshot: lastRequest.snapshot,
       contextLens: lastRequest.contextLens,
+      language: lastRequest.language,
       prediction: currentPrediction,
       data,
     });
@@ -543,9 +597,9 @@ async function settleAnalysis() {
   } catch (err) {
     const msg = err.message || '';
     if (err.name === 'TypeError' || msg.toLowerCase().includes('failed to fetch')) {
-      showApiError('Could not reach the ClaimCheck backend. Make sure it is running.');
+      showApiError(t('errors.backendUnreachable'));
     } else {
-      showApiError(msg || 'Something went wrong while checking this claim. Please try again.');
+      showApiError(msg || t('errors.generic'));
     }
   } finally {
     setLoading(false);
@@ -573,9 +627,14 @@ function onPredictionChosen(prediction) {
 
 /* ── Starter library ───────────────────────────────── */
 
+function rebuildLibrary() {
+  libraryPanel.innerHTML = '';
+  buildLibrary();
+}
+
 function buildLibrary() {
   const frag = document.createDocumentFragment();
-  for (const group of STARTER_CLAIMS) {
+  for (const group of starterGroups()) {
     const cat = el('div', 'library__category');
     const label = el('p', 'library__category-label');
     label.textContent = group.category;
@@ -621,24 +680,20 @@ function setLoading(on) {
   const statusText = document.getElementById('status-text');
   if (statusText) {
     if (isSnapshot) {
-      statusText.textContent = isUrl
-        ? 'Reading the article for a quick snapshot…'
-        : 'Pulling together a quick snapshot…';
+      statusText.textContent = isUrl ? t('status.snapshotUrl') : t('status.snapshotClaim');
     } else {
-      statusText.textContent = isUrl
-        ? 'Reading the article and identifying claims… this can take a little longer.'
-        : 'Analyzing claim — this may take up to 30 seconds…';
+      statusText.textContent = isUrl ? t('status.url') : t('status.claim');
     }
   }
   statusEl.hidden  = !on;
   checkBtn.disabled = on;
   const idleLabel = idleButtonLabel();
-  checkBtn.textContent = on ? (isSnapshot ? 'Snapshotting…' : (isUrl ? 'Analyzing…' : 'Checking…')) : idleLabel;
+  checkBtn.textContent = on ? (isSnapshot ? t('buttons.snapshotting') : (isUrl ? t('buttons.analyzing') : t('buttons.checking'))) : idleLabel;
 }
 
 function idleButtonLabel() {
-  if (snapshotToggle.checked) return inputMode === 'url' ? 'Quick Snapshot' : 'Quick Snapshot';
-  return inputMode === 'url' ? 'Analyze Article' : 'Check Claim';
+  if (snapshotToggle.checked) return t('buttons.quickSnapshot');
+  return inputMode === 'url' ? t('buttons.analyzeArticle') : t('buttons.checkClaim');
 }
 
 function clearAll() {
@@ -690,11 +745,11 @@ function renderResults(data, opts = {}) {
   // strongest evidence, with a one-click upgrade to the full analysis.
   if (isSnapshot) {
     resultsEl.appendChild(makeEvidenceSection(
-      'Supporting Evidence',
+      t('results.supporting'),
       Array.isArray(data.supporting_evidence) ? data.supporting_evidence : []
     ));
     resultsEl.appendChild(makeEvidenceSection(
-      'Contradicting Evidence',
+      t('results.contradicting'),
       Array.isArray(data.contradicting_evidence) ? data.contradicting_evidence : []
     ));
     // Surface identity concerns even in snapshot mode, but only when flagged.
@@ -709,13 +764,13 @@ function renderResults(data, opts = {}) {
 
   // 1. Extracted claim
   if (data.claim_text) {
-    const sec = makeSection('Extracted Claim');
+    const sec = makeSection(t('results.extractedClaim'));
     const p = el('p', 'claim-text-display');
     p.textContent = data.claim_text;
     if (data._meta && data._meta.academic_mode) {
       const pill = el('span', 'academic-pill');
-      pill.textContent = 'Academic';
-      pill.title = 'Sourced from peer-reviewed, university, and government domains only.';
+      pill.textContent = t('results.academicPill');
+      pill.title = t('results.academicPillTitle');
       p.appendChild(pill);
     }
     sec.appendChild(p);
@@ -727,7 +782,7 @@ function renderResults(data, opts = {}) {
     ? data.secondary_claims.filter(c => typeof c === 'string' && c.trim())
     : [];
   if (secondary.length) {
-    const sec = makeSection('Other Claims in the Article');
+    const sec = makeSection(t('results.otherClaims'));
     const list = el('ul', 'secondary-claims-list');
     for (const c of secondary) {
       const li = document.createElement('li');
@@ -740,13 +795,19 @@ function renderResults(data, opts = {}) {
 
   // 2. Claim breakdown
   const bd = data.breakdown || {};
-  if (bd.what || bd.who || bd.evidence_required) {
-    const sec = makeSection('Claim Breakdown');
+  const evidenceMatch = normalizeEvidenceFound(data);
+  if (bd.what || bd.who || bd.when || bd.where || bd.evidence_required || evidenceMatch) {
+    const sec = makeSection(t('results.breakdown'));
     const grid = el('div', 'breakdown-grid');
-    if (bd.what)              grid.appendChild(makeBreakdownItem('What', bd.what));
-    if (bd.who)               grid.appendChild(makeBreakdownItem('Who', bd.who));
-    if (bd.evidence_required) grid.appendChild(makeBreakdownItem('Evidence needed', bd.evidence_required));
+    if (bd.what)              grid.appendChild(makeBreakdownItem(t('results.what'), bd.what));
+    if (bd.who)               grid.appendChild(makeBreakdownItem(t('results.who'), bd.who));
+    // When/Where appear only when the claim is actually tied to a time or place.
+    if (strOrEmpty(bd.when))  grid.appendChild(makeBreakdownItem(t('results.when'), bd.when));
+    if (strOrEmpty(bd.where)) grid.appendChild(makeBreakdownItem(t('results.where'), bd.where));
+    if (bd.evidence_required) grid.appendChild(makeBreakdownItem(t('results.evidenceNeeded'), bd.evidence_required));
     sec.appendChild(grid);
+    // Close the loop: did the type of evidence the claim requires actually turn up?
+    if (evidenceMatch) sec.appendChild(makeEvidenceMatch(evidenceMatch));
     resultsEl.appendChild(sec);
   }
 
@@ -766,27 +827,27 @@ function renderResults(data, opts = {}) {
   }
   if (data.uncertainty_notes && data.uncertainty_notes.trim()) {
     const unc = el('p', 'uncertainty-notes');
-    unc.textContent = 'Uncertainty: ' + data.uncertainty_notes;
+    unc.textContent = t('results.uncertaintyPrefix') + data.uncertainty_notes;
     verdictSec.appendChild(unc);
   }
   resultsEl.appendChild(verdictSec);
 
   // 4. Supporting evidence
   resultsEl.appendChild(makeEvidenceSection(
-    'Supporting Evidence',
+    t('results.supporting'),
     Array.isArray(data.supporting_evidence) ? data.supporting_evidence : []
   ));
 
   // 5. Contradicting evidence
   resultsEl.appendChild(makeEvidenceSection(
-    'Contradicting Evidence',
+    t('results.contradicting'),
     Array.isArray(data.contradicting_evidence) ? data.contradicting_evidence : []
   ));
 
   // 6. Reflection questions
   const questions = Array.isArray(data.reflection_questions) ? data.reflection_questions : [];
   if (questions.length) {
-    const sec = makeSection('Questions to Consider');
+    const sec = makeSection(t('results.questions'));
     const list = el('ul', 'reflection-list');
     for (const q of questions) {
       const li = document.createElement('li');
@@ -816,13 +877,13 @@ function renderResults(data, opts = {}) {
 function appendMeta(data) {
   if (!data._meta) return;
   const parts = [];
-  if (data._meta.model) parts.push('Model: ' + data._meta.model);
+  if (data._meta.model) parts.push(t('meta.model', { model: data._meta.model }));
   if (data._meta.searches_used != null) {
     const n = data._meta.searches_used;
-    parts.push(n + ' web search' + (n === 1 ? '' : 'es'));
+    parts.push(t(n === 1 ? 'meta.searchOne' : 'meta.searchOther', { n }));
   }
-  if (data._meta.academic_mode) parts.push('Academic mode');
-  if (data._meta.snapshot) parts.push('Snapshot');
+  if (data._meta.academic_mode) parts.push(t('meta.academicMode'));
+  if (data._meta.snapshot) parts.push(t('meta.snapshot'));
   if (parts.length) {
     const meta = el('p', 'meta-row');
     meta.textContent = parts.join(' · ');
@@ -838,7 +899,7 @@ function makeSnapshotCard(data, isSnapshot) {
 
   const head = el('div', 'snapshot-card__head');
   const label = el('span', 'snapshot-card__label');
-  label.textContent = isSnapshot ? 'Quick Snapshot' : 'Snapshot';
+  label.textContent = isSnapshot ? t('snapshot.labelQuick') : t('snapshot.label');
   head.appendChild(label);
 
   const badges = el('div', 'snapshot-card__badges');
@@ -848,8 +909,8 @@ function makeSnapshotCard(data, isSnapshot) {
   const conf = confidenceValue(data.confidence);
   if (conf) {
     const cpill = el('span', `confidence-pill confidence-pill--${conf}`);
-    cpill.textContent = confidenceLabel(conf) + ' confidence';
-    cpill.title = 'How confident ClaimCheck is in this verdict given the evidence found.';
+    cpill.textContent = t('confidence.suffix', { level: confidenceLabel(conf) });
+    cpill.title = t('confidence.title');
     badges.appendChild(cpill);
   }
   head.appendChild(badges);
@@ -861,7 +922,12 @@ function makeSnapshotCard(data, isSnapshot) {
     card.appendChild(claim);
   }
 
-  const takeaway = strOrEmpty(data.verdict_explanation) || verdictSummaryTitle(v);
+  // Prefer the model's dedicated one-line TL;DR so this card doesn't just repeat
+  // the full verdict_explanation shown in the verdict card below. Older results
+  // that predate bottom_line fall back to the first sentence of the explanation.
+  const takeaway = strOrEmpty(data.bottom_line)
+    || firstSentence(data.verdict_explanation)
+    || verdictSummaryTitle(v);
   if (takeaway) {
     const t = el('p', 'snapshot-card__takeaway');
     t.textContent = takeaway;
@@ -881,9 +947,10 @@ function makeSnapshotCard(data, isSnapshot) {
 
   const sCount = Array.isArray(data.supporting_evidence) ? data.supporting_evidence.length : 0;
   const cCount = Array.isArray(data.contradicting_evidence) ? data.contradicting_evidence.length : 0;
-  const fp = [sCount + ' supporting', cCount + ' contradicting'];
+  const fp = [t('snapshot.footSupporting', { n: sCount }), t('snapshot.footContradicting', { n: cCount })];
   if (data._meta && data._meta.searches_used != null) {
-    fp.push(data._meta.searches_used + ' search' + (data._meta.searches_used === 1 ? '' : 'es'));
+    const n = data._meta.searches_used;
+    fp.push(t(n === 1 ? 'meta.searchOne' : 'meta.searchOther', { n }));
   }
   const foot = el('p', 'snapshot-card__foot');
   foot.textContent = fp.join(' · ');
@@ -897,21 +964,21 @@ function deriveConcern(data) {
   const flagged = Boolean(lens.targets_identity) ||
     (Array.isArray(lens.patterns_observed) && lens.patterns_observed.length > 0);
   if (flagged) {
-    return { level: 'warn', text: 'Identity-targeting language flagged — see the Identity Lens.' };
+    return { level: 'warn', text: t('snapshot.identityFlagged') };
   }
   const ctx = data.contextLens || data.context_lens || {};
   const warn = strOrEmpty(ctx.contextWarning);
   if (warn) return { level: 'warn', text: warn };
-  return { level: 'ok', text: 'No identity-targeting or major concern flags.' };
+  return { level: 'ok', text: t('snapshot.noConcern') };
 }
 
 function makeRunFullButton() {
   const wrap = el('div', 'snapshot-upgrade');
   const note = el('p', 'snapshot-upgrade__note');
-  note.textContent = 'Want the full picture — breakdown, all sources, context, and reflection questions?';
+  note.textContent = t('snapshot.upgradeNote');
   const btn = el('button', 'btn-primary snapshot-upgrade__btn');
   btn.type = 'button';
-  btn.textContent = 'Run full analysis';
+  btn.textContent = t('buttons.runFull');
   btn.addEventListener('click', () => rerunAsFull(btn));
   wrap.appendChild(note);
   wrap.appendChild(btn);
@@ -948,7 +1015,7 @@ function confidenceValue(raw) {
 }
 
 function confidenceLabel(c) {
-  return { high: 'High', medium: 'Medium', low: 'Low' }[c] || '';
+  return { high: t('confidence.high'), medium: t('confidence.medium'), low: t('confidence.low') }[c] || '';
 }
 
 /* ── Section builders ──────────────────────────────── */
@@ -974,11 +1041,77 @@ function makeBreakdownItem(label, value) {
   return div;
 }
 
+/* ── Evidence match ("close the loop") ─────────────── */
+
+function normalizeMatchStatus(raw) {
+  const v = String(raw || '').trim().toLowerCase();
+  return (v === 'found' || v === 'partial' || v === 'not_found') ? v : '';
+}
+
+// Work out the "evidence located" signal shown in the breakdown. Prefer the
+// model's own assessment of whether the required evidence TYPE was found; for
+// older results that predate the field, only assert the unambiguous case (no
+// sources at all) rather than guessing whether the required type actually matched.
+function normalizeEvidenceFound(data) {
+  const bd = data.breakdown || {};
+  const raw = bd.evidence_found;
+  let status = '';
+  let note = '';
+  if (raw && typeof raw === 'object') {
+    status = normalizeMatchStatus(raw.status);
+    note = strOrEmpty(raw.note);
+  }
+  if (!status) {
+    const sCount = Array.isArray(data.supporting_evidence) ? data.supporting_evidence.length : 0;
+    const cCount = Array.isArray(data.contradicting_evidence) ? data.contradicting_evidence.length : 0;
+    if (sCount + cCount === 0 && strOrEmpty(bd.evidence_required)) status = 'not_found';
+    else return null;
+  }
+  return { status, note };
+}
+
+function evidenceMatchLabel(status) {
+  return {
+    found: t('evidenceMatch.found'),
+    partial: t('evidenceMatch.partial'),
+    not_found: t('evidenceMatch.notFound'),
+  }[status] || '';
+}
+
+function makeEvidenceMatch(match) {
+  const statusClass = match.status.replace('_', '-'); // not_found -> not-found
+  const wrap = el('div', `evidence-match evidence-match--${statusClass}`);
+
+  const head = el('div', 'evidence-match__head');
+  const label = el('span', 'evidence-match__label');
+  label.textContent = t('results.evidenceLocated');
+
+  const pill = el('span', 'evidence-match__pill');
+  const icon = el('span', 'evidence-match__icon');
+  icon.setAttribute('aria-hidden', 'true');
+  icon.textContent = { found: '✓', partial: '~', not_found: '✕' }[match.status] || '';
+  const pillText = document.createElement('span');
+  pillText.textContent = evidenceMatchLabel(match.status);
+  pill.appendChild(icon);
+  pill.appendChild(pillText);
+
+  head.appendChild(label);
+  head.appendChild(pill);
+  wrap.appendChild(head);
+
+  if (match.note) {
+    const note = el('p', 'evidence-match__note');
+    note.textContent = match.note;
+    wrap.appendChild(note);
+  }
+  return wrap;
+}
+
 function makeEvidenceSection(title, items) {
   const sec = makeSection(title);
   if (!items.length) {
     const empty = el('p', 'empty-state');
-    empty.textContent = 'None found.';
+    empty.textContent = t('results.noneFound');
     sec.appendChild(empty);
     return sec;
   }
@@ -1025,16 +1158,19 @@ function makeEvidenceItem(item) {
 
 function buildCredBadge(rawTier) {
   const tier = normalizeTier(rawTier);
-  const labels = { high: 'High', medium: 'Medium', low: 'Low', unknown: 'Unrated' };
+  const labels = {
+    high: t('credibility.high'), medium: t('credibility.medium'),
+    low: t('credibility.low'), unknown: t('credibility.unknown'),
+  };
   const titles = {
-    high:    'High credibility — peer-reviewed research, primary government/IGO data, or established academic institution.',
-    medium:  'Medium credibility — established journalism with editorial standards, or nonpartisan fact-checker.',
-    low:     'Low credibility — unclear editorial process, openly partisan outlet, opinion blog, or aggregator.',
-    unknown: 'Credibility could not be determined from available signals.',
+    high:    t('credibility.titleHigh'),
+    medium:  t('credibility.titleMedium'),
+    low:     t('credibility.titleLow'),
+    unknown: t('credibility.titleUnknown'),
   };
   const span = el('span', `cred cred--${tier}`);
   span.title = titles[tier];
-  span.setAttribute('aria-label', 'Source credibility: ' + labels[tier]);
+  span.setAttribute('aria-label', t('credibility.ariaPrefix') + labels[tier]);
   const dot = el('span', 'cred-dot');
   dot.setAttribute('aria-hidden', 'true');
   span.appendChild(dot);
@@ -1051,11 +1187,11 @@ function makeIdentityLensSection(lens) {
 
   const sec = el('div', `section identity--${flagged ? 'flagged' : 'clean'}`);
   const titleEl = el('p', 'section-title');
-  titleEl.textContent = 'Identity Lens';
+  titleEl.textContent = t('identity.title');
   sec.appendChild(titleEl);
 
   const badge = el('span', 'identity-badge');
-  badge.textContent = flagged ? 'Identity targeting detected' : 'No identity targeting detected';
+  badge.textContent = flagged ? t('identity.flagged') : t('identity.clean');
   sec.appendChild(badge);
 
   if (lens.analysis) {
@@ -1067,7 +1203,7 @@ function makeIdentityLensSection(lens) {
   if (groups.length) {
     const sub = el('div', 'identity-subgroup');
     const lbl = el('p', 'identity-sublabel');
-    lbl.textContent = 'Groups referenced';
+    lbl.textContent = t('identity.groups');
     sub.appendChild(lbl);
     const ul = el('ul', 'identity-tag-list');
     for (const g of groups) {
@@ -1082,13 +1218,13 @@ function makeIdentityLensSection(lens) {
   if (patterns.length) {
     const sub = el('div', 'identity-subgroup');
     const lbl = el('p', 'identity-sublabel');
-    lbl.textContent = 'Patterns observed';
+    lbl.textContent = t('identity.patterns');
     sub.appendChild(lbl);
     const ul = el('ul', 'pattern-list');
     for (const p of patterns) {
       const li = el('li', 'pattern-item');
       const name = el('span', 'pattern-name');
-      name.textContent = (p.pattern || 'Pattern');
+      name.textContent = (p.pattern || t('identity.patternFallback'));
       li.appendChild(name);
       if (p.explanation) {
         li.appendChild(document.createTextNode(' — '));
@@ -1138,9 +1274,9 @@ function makeContextLensSection(rawLens) {
 
   const titleWrap = el('span', 'context-lens__titlewrap');
   const title = el('span', 'context-lens__title');
-  title.textContent = 'Context Lens';
+  title.textContent = t('context.title');
   const sub = el('span', 'context-lens__subtitle');
-  sub.textContent = 'Background to help you judge the claim fairly';
+  sub.textContent = t('context.subtitle');
   titleWrap.appendChild(title);
   titleWrap.appendChild(sub);
 
@@ -1158,8 +1294,7 @@ function makeContextLensSection(rawLens) {
 
   if (!hasContent) {
     const fallback = el('p', 'context-lens__fallback');
-    fallback.textContent =
-      'Context could not be generated for this claim. Try checking the claim again or adding more detail.';
+    fallback.textContent = t('context.fallback');
     body.appendChild(fallback);
   } else {
     if (warning) {
@@ -1175,31 +1310,31 @@ function makeContextLensSection(rawLens) {
     }
 
     if (snapshot) {
-      body.appendChild(makeContextBlock('Background Snapshot'));
+      body.appendChild(makeContextBlock(t('context.background')));
       const p = el('p', 'context-lens__paragraph');
       p.textContent = snapshot;
       body.appendChild(p);
     }
 
     if (keyContext.length) {
-      body.appendChild(makeContextBlock('Key Context'));
+      body.appendChild(makeContextBlock(t('context.key')));
       body.appendChild(makeContextList(keyContext, 'context-lens__list'));
     }
 
     if (whyMatters) {
-      body.appendChild(makeContextBlock('Why This Context Matters'));
+      body.appendChild(makeContextBlock(t('context.why')));
       const p = el('p', 'context-lens__paragraph');
       p.textContent = whyMatters;
       body.appendChild(p);
     }
 
     if (missing.length) {
-      body.appendChild(makeContextBlock('Missing or Needed Information'));
+      body.appendChild(makeContextBlock(t('context.missing')));
       body.appendChild(makeContextList(missing, 'context-lens__list'));
     }
 
     if (questions.length) {
-      body.appendChild(makeContextBlock('Reflection Questions'));
+      body.appendChild(makeContextBlock(t('context.reflection')));
       body.appendChild(makeContextList(questions, 'context-lens__list context-lens__list--questions'));
     }
   }
@@ -1236,6 +1371,16 @@ function strOrEmpty(v) {
   return typeof v === 'string' ? v.trim() : '';
 }
 
+// First sentence of a string — used as the summary-card fallback when a result
+// has no dedicated bottom_line. The lookahead avoids splitting on decimals
+// ("4.5 billion") by only breaking at .!? followed by whitespace or end.
+function firstSentence(v) {
+  const s = strOrEmpty(v);
+  if (!s) return '';
+  const m = s.match(/^.*?[.!?](?=\s|$)/);
+  return m ? m[0].trim() : s;
+}
+
 function cleanList(v) {
   if (!Array.isArray(v)) return [];
   return v.map(x => (typeof x === 'string' ? x.trim() : '')).filter(Boolean);
@@ -1248,14 +1393,14 @@ function makePredictionRecap(prediction, verdict) {
   const sec = el('div', `section predict-recap predict-recap--${state}`);
 
   const title = el('p', 'section-title');
-  title.textContent = 'Your Prediction vs. The Evidence';
+  title.textContent = t('predict.recapTitle');
   sec.appendChild(title);
 
   const row = el('div', 'predict-recap__row');
 
   const mine = el('div', 'predict-recap__col');
   const mineLbl = el('span', 'predict-recap__collabel');
-  mineLbl.textContent = 'You predicted';
+  mineLbl.textContent = t('predict.youPredicted');
   const mineChip = el('span', `predict-chip predict-chip--${prediction}`);
   mineChip.textContent = predictionLabel(prediction);
   mine.appendChild(mineLbl);
@@ -1267,7 +1412,7 @@ function makePredictionRecap(prediction, verdict) {
 
   const ev = el('div', 'predict-recap__col');
   const evLbl = el('span', 'predict-recap__collabel');
-  evLbl.textContent = 'Evidence says';
+  evLbl.textContent = t('predict.evidenceSays');
   const evChip = el('span', `predict-chip predict-chip--verdict-${verdict}`);
   evChip.textContent = verdictLabel(verdict);
   ev.appendChild(evLbl);
@@ -1292,20 +1437,14 @@ function predictionOutcome(prediction, verdict) {
 }
 
 function predictionLabel(p) {
-  return { true: 'Likely true', false: 'Likely false', unsure: 'Not sure' }[p] || 'Not sure';
+  return { true: t('predict.likelyTrue'), false: t('predict.likelyFalse'), unsure: t('predict.notSure') }[p] || t('predict.notSure');
 }
 
 function predictionNote(state, prediction) {
-  if (state === 'match') {
-    return 'Your initial read lined up with the evidence. Notice what signals led you there — were they reliable reasons, or a lucky guess?';
-  }
-  if (state === 'mismatch') {
-    return 'Your initial read differed from where the evidence points. That gap is worth examining: what made the claim feel believable before you checked?';
-  }
-  if (prediction === 'unsure') {
-    return 'You held off on judging — a reasonable instinct for an unfamiliar claim. See how the evidence resolves it below.';
-  }
-  return 'You had a confident prediction, but the evidence itself is mixed or limited. Certainty in your gut does not always match the strength of available proof.';
+  if (state === 'match') return t('predict.noteMatch');
+  if (state === 'mismatch') return t('predict.noteMismatch');
+  if (prediction === 'unsure') return t('predict.noteUnsure');
+  return t('predict.notePartial');
 }
 
 /* ── Sharing ───────────────────────────────────────── */
@@ -1313,21 +1452,27 @@ function predictionNote(state, prediction) {
 function makeActionsBar() {
   const bar = el('div', 'results-actions');
 
-  const shareBtn = el('button', 'btn-share');
-  shareBtn.type = 'button';
-  shareBtn.textContent = 'Copy share link';
-  shareBtn.addEventListener('click', () => onShareClick(shareBtn));
-  bar.appendChild(shareBtn);
+  // No share link in Classroom Mode. A share URL carries the full claim and
+  // result encoded in the address, which is exactly the kind of student work
+  // that should not outlive the session or travel outside the classroom.
+  // Export stays: it is generated on demand and stored nowhere.
+  if (!CLASSROOM) {
+    const shareBtn = el('button', 'btn-share');
+    shareBtn.type = 'button';
+    shareBtn.textContent = t('buttons.copyShare');
+    shareBtn.addEventListener('click', () => onShareClick(shareBtn));
+    bar.appendChild(shareBtn);
+  }
 
   const pdfBtn = el('button', 'btn-share btn-export');
   pdfBtn.type = 'button';
-  pdfBtn.textContent = 'Export as PDF';
+  pdfBtn.textContent = t('buttons.exportPdf');
   pdfBtn.addEventListener('click', () => onExportClick('pdf', pdfBtn));
   bar.appendChild(pdfBtn);
 
   const docxBtn = el('button', 'btn-share btn-export');
   docxBtn.type = 'button';
-  docxBtn.textContent = 'Export as Word';
+  docxBtn.textContent = t('buttons.exportWord');
   docxBtn.addEventListener('click', () => onExportClick('docx', docxBtn));
   bar.appendChild(docxBtn);
 
@@ -1338,7 +1483,7 @@ function makeArticleHeader(article) {
   const box = el('div', 'article-header');
 
   const label = el('span', 'article-header__label');
-  label.textContent = 'Analyzed from';
+  label.textContent = t('results.analyzedFrom');
   box.appendChild(label);
 
   if (article.title) {
@@ -1370,6 +1515,9 @@ function exportMeta() {
     originalInput: isUrl ? (r.url || '') : (r.claim || ''),
     articleTitle: article.title || '',
     sourceUrl: isUrl ? (r.url || article.url || '') : '',
+    // Export in the language the analysis was generated in (fall back to the
+    // active UI language for older records that predate this field).
+    language: r.language || (r.data && r.data._meta && r.data._meta.language) || currentLang,
   };
 }
 
@@ -1378,7 +1526,7 @@ async function onExportClick(format, btn) {
 
   if (!btn.dataset.label) btn.dataset.label = btn.textContent;
   btn.disabled = true;
-  btn.textContent = 'Exporting…';
+  btn.textContent = t('buttons.exporting');
 
   try {
     const res = await fetch('/export', {
@@ -1404,7 +1552,7 @@ async function onExportClick(format, btn) {
     btn.textContent = btn.dataset.label;
     btn.disabled = false;
   } catch {
-    btn.textContent = 'Export failed';
+    btn.textContent = t('buttons.exportFailed');
     btn.classList.add('btn-share--error');
     clearTimeout(btn._exportTimer);
     btn._exportTimer = setTimeout(() => {
@@ -1429,14 +1577,14 @@ async function onShareClick(btn) {
     url = `${location.origin}${location.pathname}#r=${encoded}`;
     history.replaceState(null, '', `${location.pathname}#r=${encoded}`);
   } catch {
-    flashBtn(btn, 'Could not build link');
+    flashBtn(btn, t('buttons.linkFailed'));
     return;
   }
   try {
     await navigator.clipboard.writeText(url);
-    flashBtn(btn, 'Link copied!');
+    flashBtn(btn, t('buttons.linkCopied'));
   } catch {
-    flashBtn(btn, 'Link in address bar');
+    flashBtn(btn, t('buttons.linkInBar'));
   }
 }
 
@@ -1452,6 +1600,10 @@ function flashBtn(btn, msg) {
 }
 
 function loadFromHash() {
+  // Classroom Mode ignores shared-result links: a student's tab should show
+  // only work done in this session, never a result pasted in from elsewhere.
+  if (CLASSROOM) return;
+
   const m = location.hash.match(/^#r=(.+)$/);
   if (!m) return;
 
@@ -1464,6 +1616,9 @@ function loadFromHash() {
   if (!state || typeof state !== 'object' || !state.data) return;
 
   clearAll();
+  // A shared link carries the language it was analyzed in; show it coherently.
+  const sharedLang = window.ccI18n.isSupported(state.language) ? state.language : currentLang;
+  if (sharedLang !== currentLang) window.ccI18n.setLang(sharedLang);
   const isUrl = state.mode === 'url' || (!!state.url && !state.claim);
   setInputMode(isUrl ? 'url' : 'claim');
   if (isUrl) {
@@ -1478,8 +1633,9 @@ function loadFromHash() {
   contextToggle.checked = contextLens;
   checkBtn.textContent  = idleButtonLabel();
   currentPrediction     = state.prediction || null;
+  if (!state.language) state.language = sharedLang;
   lastResult            = state;
-  lastRequest           = { mode: isUrl ? 'url' : 'claim', text: isUrl ? '' : claimInput.value, url: isUrl ? urlInput.value : '', academic: academicToggle.checked, snapshot, contextLens };
+  lastRequest           = { mode: isUrl ? 'url' : 'claim', text: isUrl ? '' : claimInput.value, url: isUrl ? urlInput.value : '', academic: academicToggle.checked, snapshot, contextLens, language: sharedLang };
 
   renderResults(state.data, { prediction: state.prediction });
   sharedBanner.hidden = false;
@@ -1517,15 +1673,13 @@ function normalizeVerdict(raw) {
 }
 
 function verdictLabel(v) {
-  return { supported: 'Supported', contradicted: 'Contradicted', unclear: 'Unclear' }[v] || 'Unclear';
+  const key = (v === 'supported' || v === 'contradicted' || v === 'unclear') ? v : 'unclear';
+  return t('verdict.' + key + '.label');
 }
 
 function verdictSummaryTitle(v) {
-  return {
-    supported:    'Evidence broadly aligns with the claim.',
-    contradicted: 'Evidence broadly conflicts with the claim.',
-    unclear:      'Evidence is mixed, limited, or inconclusive.',
-  }[v] || 'Evidence is mixed or inconclusive.';
+  const key = (v === 'supported' || v === 'contradicted' || v === 'unclear') ? v : 'unclear';
+  return t('verdict.' + key + '.summary');
 }
 
 function normalizeTier(raw) {

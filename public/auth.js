@@ -9,6 +9,7 @@
   const $ = (id) => document.getElementById(id);
   const show = (el) => { if (el) el.hidden = false; };
   const hide = (el) => { if (el) el.hidden = true; };
+  const t = (key, params) => (window.ccI18n ? window.ccI18n.t(key, params) : key);
 
   // ── Header account button ───────────────────────────
   const accountBtn     = $('account-btn');
@@ -89,7 +90,7 @@
   async function init() {
     const client = sb();
     if (!client) {
-      if (accountBtn) { accountBtn.disabled = true; accountBtn.title = 'Account temporarily unavailable.'; }
+      if (accountBtn) { accountBtn.disabled = true; accountBtn.title = t('auth.accountUnavailable'); }
       return;
     }
     try { await window.cc.supabaseReady; } catch {}
@@ -106,6 +107,21 @@
     });
 
     wire();
+
+    // Keep the dynamically-set auth labels (account button, modal title, submit
+    // button, import prompt) in sync when the language changes. Static markup is
+    // handled by the i18n core's applyStatic.
+    if (window.ccI18n && typeof window.ccI18n.onChange === 'function') {
+      window.ccI18n.onChange(() => {
+        renderAccountBtn();
+        renderModalPane();
+        if (!currentUser) {
+          const isSignup = authMode === 'signup';
+          if (submitLabel) submitLabel.textContent = isSignup ? t('auth.createAccount') : t('auth.signIn');
+        }
+        if (importRow && !importRow.hidden) setImportPrompt(readLocalHistory().length);
+      });
+    }
   }
 
   /* ── User state + chrome rendering ─────────────────── */
@@ -119,19 +135,19 @@
   function renderAccountBtn() {
     if (!accountBtn) return;
     if (currentUser) {
-      const email = currentUser.email || 'Account';
+      const email = currentUser.email || t('auth.account');
       const initial = (email.trim().charAt(0) || '?').toUpperCase();
       if (accountIcon) accountIcon.hidden = true;
       if (accountInitial) { accountInitial.hidden = false; accountInitial.textContent = initial; }
       accountBtn.classList.add('account-btn--signed-in');
-      accountBtn.setAttribute('aria-label', 'Account — signed in as ' + email);
+      accountBtn.setAttribute('aria-label', t('header.accountSignedIn', { email }));
       accountBtn.title = email;
     } else {
       if (accountIcon) accountIcon.hidden = false;
       if (accountInitial) { accountInitial.hidden = true; accountInitial.textContent = ''; }
       accountBtn.classList.remove('account-btn--signed-in');
-      accountBtn.setAttribute('aria-label', 'Sign in or create an account');
-      accountBtn.title = 'Sign in or create an account';
+      accountBtn.setAttribute('aria-label', t('header.account'));
+      accountBtn.title = t('header.account');
     }
   }
 
@@ -142,11 +158,11 @@
       const email = currentUser.email || '';
       if (accountEmail) accountEmail.textContent = email;
       if (accountAvatar) accountAvatar.textContent = (email.charAt(0) || 'U').toUpperCase();
-      if (titleEl) titleEl.textContent = 'Account';
+      if (titleEl) titleEl.textContent = t('auth.account');
     } else {
       show(signedOut);
       hide(signedIn);
-      if (titleEl) titleEl.textContent = authMode === 'signup' ? 'Create account' : 'Sign in';
+      if (titleEl) titleEl.textContent = authMode === 'signup' ? t('auth.createAccount') : t('auth.signIn');
     }
   }
 
@@ -173,7 +189,7 @@
     if (tabSignup) tabSignup.classList.toggle('auth-tab--active', isSignup);
     if (tabSignin) tabSignin.setAttribute('aria-selected', String(!isSignup));
     if (tabSignup) tabSignup.setAttribute('aria-selected', String(isSignup));
-    if (submitLabel) submitLabel.textContent = isSignup ? 'Create account' : 'Sign in';
+    if (submitLabel) submitLabel.textContent = isSignup ? t('auth.createAccount') : t('auth.signIn');
     if (passEl) passEl.autocomplete = isSignup ? 'new-password' : 'current-password';
     if (confirmField) confirmField.hidden = !isSignup;
     if (confirmEl) confirmEl.required = isSignup;
@@ -181,7 +197,7 @@
     hide(confirmNeeded); hide(resetForm); hide(resetSent);
     show(form);
     if (forgotBtn) forgotBtn.hidden = isSignup;
-    if (titleEl) titleEl.textContent = isSignup ? 'Create account' : 'Sign in';
+    if (titleEl) titleEl.textContent = isSignup ? t('auth.createAccount') : t('auth.signIn');
     clearError();
   }
 
@@ -204,10 +220,10 @@
 
   function humanizeError(err) {
     const msg = (err && (err.message || err.error_description)) || String(err);
-    if (/Invalid login credentials/i.test(msg)) return 'Email or password is incorrect.';
-    if (/User already registered/i.test(msg)) return 'An account with that email already exists. Try signing in.';
+    if (/Invalid login credentials/i.test(msg)) return t('auth.errInvalidCredentials');
+    if (/User already registered/i.test(msg)) return t('auth.errAlreadyRegistered');
     if (/Password should be at least/i.test(msg)) return msg;
-    if (/Email not confirmed/i.test(msg)) return 'Please confirm your email before signing in.';
+    if (/Email not confirmed/i.test(msg)) return t('auth.errNotConfirmed');
     return msg;
   }
 
@@ -215,12 +231,12 @@
   async function handleSubmit(e) {
     e.preventDefault();
     const client = sb();
-    if (!client) { showError('Auth service unavailable.'); return; }
+    if (!client) { showError(t('auth.unavailable')); return; }
     const email = (emailEl.value || '').trim();
     const password = passEl.value || '';
-    if (!email || !password) { showError('Email and password are required.'); return; }
+    if (!email || !password) { showError(t('auth.credentialsRequired')); return; }
     if (authMode === 'signup' && password !== (confirmEl.value || '')) {
-      showError('Passwords don’t match.');
+      showError(t('auth.passwordsMismatch'));
       confirmEl.focus();
       return;
     }
@@ -253,7 +269,7 @@
 
   async function handleGoogle() {
     const client = sb();
-    if (!client) { showError('Auth service unavailable.'); return; }
+    if (!client) { showError(t('auth.unavailable')); return; }
     clearError();
     setGoogleLoading(true);
     try {
@@ -273,9 +289,9 @@
   async function handleReset(e) {
     e.preventDefault();
     const client = sb();
-    if (!client) { showResetError('Auth service unavailable.'); return; }
+    if (!client) { showResetError(t('auth.unavailable')); return; }
     const email = (resetEmail.value || '').trim();
-    if (!email) { showResetError('Email is required.'); return; }
+    if (!email) { showResetError(t('auth.emailRequired')); return; }
     clearResetError();
     setResetLoading(true);
     try {
@@ -313,11 +329,15 @@
     try { return JSON.parse(localStorage.getItem('claimcheck_history') || '[]'); } catch { return []; }
   }
 
+  function setImportPrompt(n) {
+    if (!importText) return;
+    importText.textContent = t(n === 1 ? 'auth.importPromptOne' : 'auth.importPromptOther', { n });
+  }
+
   function maybeOfferImport() {
     const local = readLocalHistory();
     if (!Array.isArray(local) || local.length === 0) { hide(importRow); return; }
-    if (importText) importText.textContent =
-      'Import ' + local.length + ' past check' + (local.length === 1 ? '' : 's') + ' to your account?';
+    setImportPrompt(local.length);
     show(importRow);
     openModal();
   }
@@ -327,7 +347,7 @@
     if (!client || !currentUser) return;
     const local = readLocalHistory();
     if (!local.length) { hide(importRow); return; }
-    if (importYes) { importYes.disabled = true; importYes.textContent = 'Importing…'; }
+    if (importYes) { importYes.disabled = true; importYes.textContent = t('auth.importing'); }
     if (importNo) importNo.disabled = true;
     try {
       const rows = local.map((entry) => buildRow(entry));
@@ -339,9 +359,9 @@
       hide(importRow);
       notifyChange();
     } catch (err) {
-      showError('Import failed: ' + humanizeError(err));
+      showError(t('auth.importFailed') + humanizeError(err));
     } finally {
-      if (importYes) { importYes.disabled = false; importYes.textContent = 'Import'; }
+      if (importYes) { importYes.disabled = false; importYes.textContent = t('auth.import'); }
       if (importNo) importNo.disabled = false;
     }
   }
@@ -372,6 +392,7 @@
         meta: r._meta || null,
         // Website-specific extras (ignored by the extension):
         input_text: (entry && entry.claim) || '',
+        input_lang: (entry && entry.language) || null,
         prediction: (entry && entry.prediction) || null,
         academic: !!(entry && entry.academic),
       },
@@ -390,6 +411,7 @@
       claim_text: row.claim_text || '',
       verdict: (row.verdict || 'unclear'),
       academic: !!s.academic,
+      language: s.input_lang || (s.meta && s.meta.language) || undefined,
       prediction: s.prediction || null,
       data: {
         claim_text: row.claim_text,

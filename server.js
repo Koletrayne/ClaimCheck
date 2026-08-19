@@ -3,9 +3,11 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
-const { analyzeClaim } = require('./lib/analyze');
+const { analyzeClaim, normalizeLanguage } = require('./lib/analyze');
 const { extractArticle, ExtractError } = require('./lib/extract-article');
 const { normalizeResult, buildPdf, buildDocx, safeFilename } = require('./lib/export-report');
+const { router: classroomRouter } = require('./lib/classroom-routes');
+const { isConfigured: classroomConfigured } = require('./lib/supabase-admin');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -60,11 +62,39 @@ app.get('/health', (req, res) => {
     status: 'ok',
     model: process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-6',
     hasKey: Boolean(process.env.ANTHROPIC_API_KEY),
+    classroomMode: classroomConfigured(),
   });
 });
 
+// ── Classroom Mode ───────────────────────────────────────────────────────
+// Entirely additive: the public ClaimCheck experience above and below this
+// block is untouched, and these routes report 503 until Classroom Mode is
+// configured. The classroom pages themselves are static files under
+// public/classroom/ and are served by express.static; the only page route
+// needed here is the /classroom/CODE join shortcut, which has no file to match.
+app.use('/api/classroom', classroomRouter);
+
+// Extensionless page paths. express.static serves public/classroom/index.html
+// for /classroom itself, but not these, so they are mapped explicitly.
+const CLASSROOM_PAGES = { join: 'join.html', admin: 'admin.html', room: 'room.html' };
+
+app.get('/classroom/:segment', (req, res, next) => {
+  const { segment } = req.params;
+
+  const page = CLASSROOM_PAGES[segment];
+  if (page) return res.sendFile(path.join(__dirname, 'public', 'classroom', page));
+
+  // Otherwise treat the segment as an access code if it is shaped like one, and
+  // let the join page read it back out of the URL. Anything else falls through
+  // to the normal 404 path.
+  if (/^[A-Za-z0-9]{8}$|^[A-Za-z0-9]{4}-[A-Za-z0-9]{4}$/.test(segment)) {
+    return res.sendFile(path.join(__dirname, 'public', 'classroom', 'join.html'));
+  }
+  next();
+});
+
 app.post('/analyze', async (req, res) => {
-  const { text, sourceUrl, academicMode, snapshot, contextLens } = req.body || {};
+  const { text, sourceUrl, academicMode, snapshot, contextLens, language } = req.body || {};
 
   if (typeof text !== 'string' || text.trim().length < 8) {
     return res.status(400).json({
@@ -85,7 +115,7 @@ app.post('/analyze', async (req, res) => {
   }
 
   try {
-    const result = await analyzeClaim({ text, sourceUrl, academicMode: Boolean(academicMode), snapshot: Boolean(snapshot), includeContextLens: contextLens !== false });
+    const result = await analyzeClaim({ text, sourceUrl, academicMode: Boolean(academicMode), snapshot: Boolean(snapshot), includeContextLens: contextLens !== false, language: normalizeLanguage(language) });
     res.json(result);
   } catch (err) {
     console.error('[analyze] failed:', err);
@@ -96,7 +126,7 @@ app.post('/analyze', async (req, res) => {
 });
 
 app.post('/analyze-url', urlRateLimiter, async (req, res) => {
-  const { url, academicMode, snapshot, contextLens } = req.body || {};
+  const { url, academicMode, snapshot, contextLens, language } = req.body || {};
 
   if (typeof url !== 'string' || !url.trim()) {
     return res.status(400).json({ error: 'Provide a URL to analyze.' });
@@ -132,6 +162,7 @@ app.post('/analyze-url', urlRateLimiter, async (req, res) => {
       includeSecondaryClaims: true,
       snapshot: Boolean(snapshot),
       includeContextLens: contextLens !== false,
+      language: normalizeLanguage(language),
     });
     result._article = {
       title: article.title,

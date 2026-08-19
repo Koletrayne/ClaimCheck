@@ -14,6 +14,26 @@
     </svg>
     <span class="site-name">ClaimCheck</span>
     <div class="header-actions">
+      <a
+        id="classroom-link"
+        class="header-btn header-btn--labeled"
+        href="/classroom"
+        data-i18n-title="header.classroomTitle"
+        title="Classroom Mode — temporary classrooms students join with a code"
+      >
+        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path d="M22 10 12 5 2 10l10 5 10-5z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          <path d="M6 12.5V17c0 1.4 2.7 2.5 6 2.5s6-1.1 6-2.5v-4.5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        <span class="header-btn__label" data-i18n="header.classroom">Classroom</span>
+      </a>
+      <div class="lang-select-wrap">
+        <label for="lang-select" class="lang-select-label" data-i18n="header.language">Language</label>
+        <select id="lang-select" class="lang-select" data-i18n-aria-label="header.language" aria-label="Language">
+          <option value="en">English</option>
+          <option value="es">Español</option>
+        </select>
+      </div>
       <button id="account-btn" class="header-btn account-btn" type="button" aria-label="Sign in or create an account" aria-haspopup="dialog" aria-expanded="false">
         <svg class="account-btn__icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
           <circle cx="12" cy="8" r="4" stroke="currentColor" stroke-width="2"/>
@@ -21,13 +41,13 @@
         </svg>
         <span class="account-btn__initial" aria-hidden="true" hidden></span>
       </button>
-      <button id="history-btn" class="header-btn" type="button" aria-label="View claim history">
+      <button id="history-btn" class="header-btn" type="button" data-i18n-aria-label="header.history" aria-label="View claim history">
         <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
           <circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2"/>
           <path d="M12 7v5l3 3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
         </svg>
       </button>
-      <button id="theme-toggle" class="header-btn" type="button" aria-label="Toggle dark mode">
+      <button id="theme-toggle" class="header-btn" type="button" data-i18n-aria-label="header.theme" aria-label="Toggle dark mode">
         <svg class="icon-moon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
           <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
         </svg>
@@ -48,19 +68,19 @@
 
   <main class="main">
     <div class="intro">
-      <h1 class="intro__title">ClaimCheck</h1>
-      <p class="intro__subtitle">Check online claims with evidence-based analysis.</p>
+      <h1 class="intro__title" data-i18n="intro.title">ClaimCheck</h1>
+      <p class="intro__subtitle" data-i18n="intro.subtitle">Check online claims with evidence-based analysis.</p>
     </div>
 
     <div id="shared-banner" class="shared-banner" hidden>
-      <span class="shared-banner__text">You're viewing a shared analysis. Edit the claim and check again to run your own.</span>
-      <button id="dismiss-shared" class="shared-banner__dismiss" type="button" aria-label="Dismiss">&times;</button>
+      <span class="shared-banner__text" data-i18n="shared.text">You're viewing a shared analysis. Edit the claim and check again to run your own.</span>
+      <button id="dismiss-shared" class="shared-banner__dismiss" type="button" data-i18n-aria-label="shared.dismiss" aria-label="Dismiss">&times;</button>
     </div>
 
     <div class="card">
-      <div class="input-tabs" role="tablist" aria-label="Input mode">
-        <button id="tab-claim" class="input-tab input-tab--active" type="button" role="tab" aria-selected="true" aria-controls="claim-pane">Check a Claim</button>
-        <button id="tab-url" class="input-tab" type="button" role="tab" aria-selected="false" aria-controls="url-pane">Analyze an Article URL</button>
+      <div class="input-tabs" role="tablist" data-i18n-aria-label="a11y.inputMode" aria-label="Input mode">
+        <button id="tab-claim" class="input-tab input-tab--active" type="button" role="tab" aria-selected="true" aria-controls="claim-pane" data-i18n="tabs.claim">Check a Claim</button>
+        <button id="tab-url" class="input-tab" type="button" role="tab" aria-selected="false" aria-controls="url-pane" data-i18n="tabs.url">Analyze an Article URL</button>
       </div>
 
       <div id="claim-pane" class="input-pane" role="tabpanel" aria-labelledby="tab-claim">
@@ -68,12 +88,14 @@
           id="claim-input"
           class="claim-textarea"
           placeholder='e.g. "Drinking coffee reduces the risk of type 2 diabetes."'
+          data-i18n-placeholder="input.claimPlaceholder"
           rows="5"
           maxlength="8000"
           aria-label="Claim to check"
+          data-i18n-aria-label="input.claimAria"
           spellcheck="true"
         ></textarea>
-        <p class="helper-text">Paste a claim, headline, statistic, or short paragraph. Max 8,000 characters.</p>
+        <p class="helper-text" data-i18n="input.claimHelper">Paste a claim, headline, statistic, or short paragraph. Max 8,000 characters.</p>
       </div>
 
       <div id="url-pane" class="input-pane" role="tabpanel" aria-labelledby="tab-url" hidden>
@@ -83,11 +105,13 @@
           type="url"
           inputmode="url"
           placeholder="https://example.com/news/article"
+          data-i18n-placeholder="input.urlPlaceholder"
           aria-label="Article URL to analyze"
+          data-i18n-aria-label="input.urlAria"
           spellcheck="false"
           autocomplete="url"
         />
-        <p class="helper-text">Paste a link to a news article or web page. ClaimCheck reads the page, identifies the main claim, and evaluates it.</p>
+        <p class="helper-text" data-i18n="input.urlHelper">Paste a link to a news article or web page. ClaimCheck reads the page, identifies the main claim, and evaluates it.</p>
       </div>
 
       <div id="field-error" class="field-error" hidden></div>
@@ -96,46 +120,46 @@
         <div class="toggle-group">
           <label class="academic-label">
             <input type="checkbox" id="academic-toggle" />
-            <span>Academic sources only</span>
+            <span data-i18n="toggles.academic">Academic sources only</span>
           </label>
-          <label class="academic-label" title="Make your own prediction before the evidence is revealed, then compare.">
+          <label class="academic-label" data-i18n-title="toggles.predictTitle" title="Make your own prediction before the evidence is revealed, then compare.">
             <input type="checkbox" id="predict-toggle" checked />
-            <span>Predict first</span>
+            <span data-i18n="toggles.predict">Predict first</span>
           </label>
-          <label class="academic-label" title="Get a faster, abbreviated rundown — verdict, confidence, one-line takeaway, and any red flag — instead of the full report.">
+          <label class="academic-label" data-i18n-title="toggles.snapshotTitle" title="Get a faster, abbreviated rundown — verdict, confidence, one-line takeaway, and any red flag — instead of the full report.">
             <input type="checkbox" id="snapshot-toggle" />
-            <span>Quick snapshot</span>
+            <span data-i18n="toggles.snapshot">Quick snapshot</span>
           </label>
-          <label class="academic-label" title="Include the Context Lens — background and reflection questions that help you judge the claim fairly.">
+          <label class="academic-label" data-i18n-title="toggles.contextTitle" title="Include the Context Lens — background and reflection questions that help you judge the claim fairly.">
             <input type="checkbox" id="context-toggle" checked />
-            <span>Context Lens</span>
+            <span data-i18n="toggles.context">Context Lens</span>
           </label>
         </div>
-        <button id="check-btn" class="btn-primary">Check Claim</button>
+        <button id="check-btn" class="btn-primary" data-i18n="buttons.checkClaim">Check Claim</button>
       </div>
     </div>
 
     <div class="library">
       <button id="library-toggle" class="library__toggle" type="button" aria-expanded="false" aria-controls="library-panel">
         <span class="library__chevron" aria-hidden="true">&rsaquo;</span>
-        Need a claim to try? Browse examples
+        <span data-i18n="library.toggle">Need a claim to try? Browse examples</span>
       </button>
       <div id="library-panel" class="library__panel" hidden></div>
     </div>
 
     <div id="predict-panel" class="predict-panel" hidden>
-      <p class="predict-panel__prompt">Before you see the evidence&nbsp;&mdash; what's your read on this claim?</p>
-      <div class="predict-panel__options" role="group" aria-label="Your prediction">
-        <button class="predict-btn" type="button" data-prediction="true">Likely&nbsp;true</button>
-        <button class="predict-btn" type="button" data-prediction="unsure">Not&nbsp;sure</button>
-        <button class="predict-btn" type="button" data-prediction="false">Likely&nbsp;false</button>
+      <p class="predict-panel__prompt" data-i18n="predict.prompt">Before you see the evidence&nbsp;&mdash; what's your read on this claim?</p>
+      <div class="predict-panel__options" role="group" data-i18n-aria-label="a11y.yourPrediction" aria-label="Your prediction">
+        <button class="predict-btn" type="button" data-prediction="true" data-i18n="predict.likelyTrue">Likely&nbsp;true</button>
+        <button class="predict-btn" type="button" data-prediction="unsure" data-i18n="predict.notSure">Not&nbsp;sure</button>
+        <button class="predict-btn" type="button" data-prediction="false" data-i18n="predict.likelyFalse">Likely&nbsp;false</button>
       </div>
-      <p class="predict-panel__hint">Your prediction stays on this device &mdash; it's just to help you reflect.</p>
+      <p class="predict-panel__hint" data-i18n="predict.hint">Your prediction stays on this device &mdash; it's just to help you reflect.</p>
     </div>
 
     <div id="status" class="status" hidden>
       <span class="spinner" aria-hidden="true"></span>
-      <span id="status-text">Analyzing claim — this may take up to 30 seconds&hellip;</span>
+      <span id="status-text" data-i18n="status.claim">Analyzing claim — this may take up to 30 seconds&hellip;</span>
     </div>
 
     <div id="api-error" class="error-banner" hidden>
@@ -148,8 +172,8 @@
   <div id="history-modal" class="history-overlay" hidden role="dialog" aria-modal="true" aria-labelledby="history-title">
     <div class="history-panel">
       <div class="history-panel-head">
-        <h2 id="history-title" class="history-title">History</h2>
-        <button id="history-close" class="history-close" type="button" aria-label="Close history">&times;</button>
+        <h2 id="history-title" class="history-title" data-i18n="history.title">History</h2>
+        <button id="history-close" class="history-close" type="button" data-i18n-aria-label="history.close" aria-label="Close history">&times;</button>
       </div>
       <div id="history-list" class="history-list"></div>
     </div>
@@ -159,13 +183,13 @@
     <div class="auth-modal">
       <div class="auth-modal__head">
         <h2 id="auth-title" class="auth-modal__title">Sign in</h2>
-        <button id="auth-close" class="history-close" type="button" aria-label="Close">&times;</button>
+        <button id="auth-close" class="history-close" type="button" data-i18n-aria-label="auth.close" aria-label="Close">&times;</button>
       </div>
 
       <div id="auth-signed-out" class="auth-pane">
-        <div class="auth-tabs" role="tablist" aria-label="Auth mode">
-          <button id="auth-tab-signin" class="auth-tab auth-tab--active" type="button" role="tab" aria-selected="true">Sign in</button>
-          <button id="auth-tab-signup" class="auth-tab" type="button" role="tab" aria-selected="false">Sign up</button>
+        <div class="auth-tabs" role="tablist" data-i18n-aria-label="a11y.authMode" aria-label="Auth mode">
+          <button id="auth-tab-signin" class="auth-tab auth-tab--active" type="button" role="tab" aria-selected="true" data-i18n="auth.signIn">Sign in</button>
+          <button id="auth-tab-signup" class="auth-tab" type="button" role="tab" aria-selected="false" data-i18n="auth.signUp">Sign up</button>
         </div>
 
         <form id="auth-form" class="auth-form" novalidate>
@@ -176,20 +200,20 @@
               <path fill="#FBBC05" d="M3.95 10.7A5.4 5.4 0 0 1 3.66 9c0-.59.1-1.17.29-1.7V4.96H.96A9 9 0 0 0 0 9c0 1.45.35 2.83.96 4.04l2.99-2.34Z"/>
               <path fill="#EA4335" d="M9 3.58c1.32 0 2.5.45 3.44 1.35l2.58-2.58A9 9 0 0 0 9 0 9 9 0 0 0 .96 4.96l2.99 2.34C4.66 5.17 6.65 3.58 9 3.58Z"/>
             </svg>
-            <span class="btn-google__label">Continue with Google</span>
+            <span class="btn-google__label" data-i18n="auth.continueGoogle">Continue with Google</span>
             <span id="auth-google-spinner" class="auth-spinner" hidden aria-hidden="true"></span>
           </button>
-          <div class="auth-divider" aria-hidden="true"><span>or</span></div>
+          <div class="auth-divider" aria-hidden="true"><span data-i18n="auth.or">or</span></div>
           <label class="auth-field">
-            <span class="auth-field__label">Email</span>
+            <span class="auth-field__label" data-i18n="auth.email">Email</span>
             <input id="auth-email" type="email" autocomplete="email" required spellcheck="false" />
           </label>
           <label class="auth-field">
-            <span class="auth-field__label">Password</span>
+            <span class="auth-field__label" data-i18n="auth.password">Password</span>
             <input id="auth-password" type="password" autocomplete="current-password" required minlength="6" />
           </label>
           <label id="auth-confirm-field" class="auth-field" hidden>
-            <span class="auth-field__label">Confirm password</span>
+            <span class="auth-field__label" data-i18n="auth.confirmPassword">Confirm password</span>
             <input id="auth-password-confirm" type="password" autocomplete="new-password" minlength="6" />
           </label>
           <p id="auth-error" class="auth-error" hidden></p>
@@ -197,34 +221,34 @@
             <span id="auth-submit-label">Sign in</span>
             <span id="auth-submit-spinner" class="auth-spinner" hidden aria-hidden="true"></span>
           </button>
-          <button id="auth-forgot" class="auth-link" type="button">Forgot password?</button>
+          <button id="auth-forgot" class="auth-link" type="button" data-i18n="auth.forgot">Forgot password?</button>
         </form>
 
         <form id="auth-reset-form" class="auth-form" hidden novalidate>
-          <p class="auth-sub-title">Reset your password</p>
-          <p class="auth-hint">Enter your email and we’ll send you a reset link.</p>
+          <p class="auth-sub-title" data-i18n="auth.resetTitle">Reset your password</p>
+          <p class="auth-hint" data-i18n="auth.resetHint">Enter your email and we’ll send you a reset link.</p>
           <label class="auth-field">
-            <span class="auth-field__label">Email</span>
+            <span class="auth-field__label" data-i18n="auth.email">Email</span>
             <input id="auth-reset-email" type="email" autocomplete="email" required spellcheck="false" />
           </label>
           <p id="auth-reset-error" class="auth-error" hidden></p>
           <button id="auth-reset-submit" class="btn-primary auth-submit" type="submit">
-            <span id="auth-reset-label">Send reset link</span>
+            <span id="auth-reset-label" data-i18n="auth.sendReset">Send reset link</span>
             <span id="auth-reset-spinner" class="auth-spinner" hidden aria-hidden="true"></span>
           </button>
-          <button id="auth-reset-back" class="auth-link" type="button">Back to sign in</button>
+          <button id="auth-reset-back" class="auth-link" type="button" data-i18n="auth.backToSignIn">Back to sign in</button>
         </form>
 
         <div id="auth-confirm-needed" class="auth-confirm" hidden>
-          <p class="auth-sub-title">Check your inbox</p>
-          <p class="auth-hint">We sent a confirmation link to <span id="auth-confirm-email"></span>. Click it, then return here to sign in.</p>
-          <button id="auth-confirm-back" class="btn-primary" type="button">Back to sign in</button>
+          <p class="auth-sub-title" data-i18n="auth.checkInbox">Check your inbox</p>
+          <p class="auth-hint"><span data-i18n="auth.confirmHintBefore">We sent a confirmation link to </span><span id="auth-confirm-email"></span><span data-i18n="auth.confirmHintAfter">. Click it, then return here to sign in.</span></p>
+          <button id="auth-confirm-back" class="btn-primary" type="button" data-i18n="auth.backToSignIn">Back to sign in</button>
         </div>
 
         <div id="auth-reset-sent" class="auth-confirm" hidden>
-          <p class="auth-sub-title">Check your inbox</p>
-          <p class="auth-hint">We sent a password reset link to <span id="auth-reset-sent-email"></span>. Click it to set a new password.</p>
-          <button id="auth-reset-sent-back" class="btn-primary" type="button">Back to sign in</button>
+          <p class="auth-sub-title" data-i18n="auth.checkInbox">Check your inbox</p>
+          <p class="auth-hint"><span data-i18n="auth.resetSentBefore">We sent a password reset link to </span><span id="auth-reset-sent-email"></span><span data-i18n="auth.resetSentAfter">. Click it to set a new password.</span></p>
+          <button id="auth-reset-sent-back" class="btn-primary" type="button" data-i18n="auth.backToSignIn">Back to sign in</button>
         </div>
       </div>
 
@@ -232,26 +256,29 @@
         <div class="auth-account">
           <div id="auth-account-avatar" class="auth-account__avatar">U</div>
           <div class="auth-account__meta">
-            <div class="auth-account__label">Signed in as</div>
+            <div class="auth-account__label" data-i18n="auth.signedInAs">Signed in as</div>
             <div id="auth-account-email" class="auth-account__email"></div>
             <div class="auth-account__sync">
               <span class="auth-account__dot" aria-hidden="true"></span>
-              <span>History synced to your account</span>
+              <span data-i18n="auth.historySynced">History synced to your account</span>
             </div>
           </div>
         </div>
         <div id="auth-import-row" class="auth-import" hidden>
           <p id="auth-import-text" class="auth-import__text"></p>
           <div class="auth-import__actions">
-            <button id="auth-import-yes" class="btn-primary auth-import__btn" type="button">Import</button>
-            <button id="auth-import-no" class="btn-ghost auth-import__btn" type="button">Dismiss</button>
+            <button id="auth-import-yes" class="btn-primary auth-import__btn" type="button" data-i18n="auth.import">Import</button>
+            <button id="auth-import-no" class="btn-ghost auth-import__btn" type="button" data-i18n="shared.dismiss">Dismiss</button>
           </div>
         </div>
-        <button id="auth-signout" class="btn-ghost auth-signout" type="button">Sign out</button>
+        <button id="auth-signout" class="btn-ghost auth-signout" type="button" data-i18n="auth.signOut">Sign out</button>
       </div>
     </div>
   </div>
 
+  <script src="locales/en.js"></script>
+  <script src="locales/es.js"></script>
+  <script src="lib/i18n.js"></script>
   <script src="lib/supabase.js"></script>
   <script src="lib/supabase-config.js"></script>
   <script src="lib/supabase-init.js"></script>

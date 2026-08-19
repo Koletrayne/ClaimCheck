@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Classroom &middot; ClaimCheck</title>
+  <link rel="stylesheet" href="../style.css" />
+  <link rel="stylesheet" href="classroom.css" />
+  <script src="theme.js"></script>
+</head>
+<!--
+  The student environment. It reuses public/app.js unchanged rather than
+  duplicating the analysis UI, so classroom students get the same evidence,
+  Context Lens, predict-first gate, snapshot mode, and exports as everyone else,
+  and future improvements land in both places at once.
+
+  Reusing app.js means reproducing the element ids it binds to at load time.
+  Where an element exists only to satisfy that contract and has no place in a
+  classroom (history), it is present but hidden and unreachable — and app.js
+  writes no history in classroom mode regardless.
+
+  Note what is NOT loaded here: no Supabase client, no auth.js. A student's
+  browser never receives an auth library or talks to the auth service at all.
+-->
+<body>
+  <header class="site-header">
+    <a class="site-brand" href="/classroom">
+      <svg class="logo-icon" viewBox="0 0 32 32" fill="none" aria-hidden="true">
+        <circle cx="16" cy="16" r="14" stroke="currentColor" stroke-width="2"/>
+        <path d="M10 16l4 4 8-8" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      <span class="site-name">ClaimCheck</span>
+    </a>
+    <span class="cc-badge">Classroom</span>
+    <div class="header-actions">
+      <div class="lang-select-wrap">
+        <label for="lang-select" class="lang-select-label" data-i18n="header.language">Language</label>
+        <select id="lang-select" class="lang-select" data-i18n-aria-label="header.language" aria-label="Language">
+          <option value="en">English</option>
+          <option value="es">Español</option>
+        </select>
+      </div>
+      <button id="theme-toggle" class="header-btn" type="button" data-i18n-aria-label="header.theme" aria-label="Toggle dark mode">
+        <svg class="icon-moon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        <svg class="icon-sun" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <circle cx="12" cy="12" r="5" stroke="currentColor" stroke-width="2"/>
+          <line x1="12" y1="1" x2="12" y2="3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          <line x1="12" y1="21" x2="12" y2="23" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          <line x1="4.22" y1="4.22" x2="5.64" y2="5.64" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          <line x1="18.36" y1="18.36" x2="19.78" y2="19.78" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          <line x1="1" y1="12" x2="3" y2="12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          <line x1="21" y1="12" x2="23" y2="12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          <line x1="4.22" y1="19.78" x2="5.64" y2="18.36" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          <line x1="18.36" y1="5.64" x2="19.78" y2="4.22" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+        </svg>
+      </button>
+      <button id="leave-btn" class="cc-btn" type="button">Leave</button>
+    </div>
+  </header>
+
+  <main class="main cc-main">
+    <div id="cc-banner" class="cc-banner">
+      <div>
+        <div class="cc-banner__label">Classroom Mode &mdash; temporary session</div>
+        <div id="cc-room-name" class="cc-banner__name">Classroom</div>
+      </div>
+      <div class="cc-banner__meta">
+        <span class="cc-banner__stat">Ends <b id="cc-expires">—</b></span>
+        <span class="cc-banner__stat">
+          Class allowance
+          <span id="cc-meter" class="cc-meter" role="img" aria-label="Remaining class allowance">
+            <span id="cc-meter-fill" class="cc-meter__fill" style="width:100%"></span>
+          </span>
+        </span>
+      </div>
+    </div>
+
+    <div class="cc-privacy">
+      <svg class="cc-privacy__icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <path d="M12 9v4m0 4h.01M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"
+              stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      <span>
+        <strong>Keep personal information out of the box below.</strong>
+        Do not enter your name, another person&rsquo;s private information, student IDs,
+        addresses, phone numbers, or other details that identify someone.
+      </span>
+    </div>
+
+    <div id="cc-pii-warning" class="cc-error" hidden role="alert"></div>
+
+    <div class="card">
+      <div class="input-tabs" role="tablist" data-i18n-aria-label="a11y.inputMode" aria-label="Input mode">
+        <button id="tab-claim" class="input-tab input-tab--active" type="button" role="tab" aria-selected="true" aria-controls="claim-pane" data-i18n="tabs.claim">Check a Claim</button>
+        <button id="tab-url" class="input-tab" type="button" role="tab" aria-selected="false" aria-controls="url-pane" data-i18n="tabs.url">Analyze an Article URL</button>
+      </div>
+
+      <div id="claim-pane" class="input-pane" role="tabpanel" aria-labelledby="tab-claim">
+        <textarea
+          id="claim-input"
+          class="claim-textarea"
+          placeholder='e.g. "Drinking coffee reduces the risk of type 2 diabetes."'
+          data-i18n-placeholder="input.claimPlaceholder"
+          rows="5"
+          maxlength="8000"
+          aria-label="Claim to check"
+          data-i18n-aria-label="input.claimAria"
+          spellcheck="true"
+        ></textarea>
+        <p class="helper-text" data-i18n="input.claimHelper">Paste a claim, headline, statistic, or short paragraph. Max 8,000 characters.</p>
+      </div>
+
+      <div id="url-pane" class="input-pane" role="tabpanel" aria-labelledby="tab-url" hidden>
+        <input
+          id="url-input"
+          class="url-input"
+          type="url"
+          inputmode="url"
+          placeholder="https://example.com/news/article"
+          data-i18n-placeholder="input.urlPlaceholder"
+          aria-label="Article URL to analyze"
+          data-i18n-aria-label="input.urlAria"
+          spellcheck="false"
+          autocomplete="url"
+        />
+        <p class="helper-text" data-i18n="input.urlHelper">Paste a link to a news article or web page. ClaimCheck reads the page, identifies the main claim, and evaluates it.</p>
+      </div>
+
+      <div id="field-error" class="field-error" hidden></div>
+
+      <div class="controls">
+        <div class="toggle-group">
+          <label class="academic-label">
+            <input type="checkbox" id="academic-toggle" />
+            <span data-i18n="toggles.academic">Academic sources only</span>
+          </label>
+          <label class="academic-label" data-i18n-title="toggles.predictTitle" title="Make your own prediction before the evidence is revealed, then compare.">
+            <input type="checkbox" id="predict-toggle" checked />
+            <span data-i18n="toggles.predict">Predict first</span>
+          </label>
+          <label class="academic-label" data-i18n-title="toggles.snapshotTitle" title="Get a faster, abbreviated rundown instead of the full report.">
+            <input type="checkbox" id="snapshot-toggle" />
+            <span data-i18n="toggles.snapshot">Quick snapshot</span>
+          </label>
+          <label class="academic-label" data-i18n-title="toggles.contextTitle" title="Include the Context Lens — background and reflection questions.">
+            <input type="checkbox" id="context-toggle" checked />
+            <span data-i18n="toggles.context">Context Lens</span>
+          </label>
+        </div>
+        <button id="check-btn" class="btn-primary" data-i18n="buttons.checkClaim">Check Claim</button>
+      </div>
+    </div>
+
+    <div class="library">
+      <button id="library-toggle" class="library__toggle" type="button" aria-expanded="false" aria-controls="library-panel">
+        <span class="library__chevron" aria-hidden="true">&rsaquo;</span>
+        <span data-i18n="library.toggle">Need a claim to try? Browse examples</span>
+      </button>
+      <div id="library-panel" class="library__panel" hidden></div>
+    </div>
+
+    <div id="predict-panel" class="predict-panel" hidden>
+      <p class="predict-panel__prompt" data-i18n="predict.prompt">Before you see the evidence&nbsp;&mdash; what's your read on this claim?</p>
+      <div class="predict-panel__options" role="group" data-i18n-aria-label="a11y.yourPrediction" aria-label="Your prediction">
+        <button class="predict-btn" type="button" data-prediction="true" data-i18n="predict.likelyTrue">Likely&nbsp;true</button>
+        <button class="predict-btn" type="button" data-prediction="unsure" data-i18n="predict.notSure">Not&nbsp;sure</button>
+        <button class="predict-btn" type="button" data-prediction="false" data-i18n="predict.likelyFalse">Likely&nbsp;false</button>
+      </div>
+      <p class="predict-panel__hint" data-i18n="predict.hint">Your prediction stays on this device &mdash; it's just to help you reflect.</p>
+    </div>
+
+    <div id="status" class="status" hidden>
+      <span class="spinner" aria-hidden="true"></span>
+      <span id="status-text" data-i18n="status.claim">Analyzing claim — this may take up to 30 seconds&hellip;</span>
+    </div>
+
+    <div id="api-error" class="error-banner" hidden>
+      <p id="api-error-text"></p>
+    </div>
+
+    <div id="results" hidden></div>
+  </main>
+
+  <!--
+    Present only to satisfy app.js's element bindings. Classroom Mode writes no
+    history, and there is no control anywhere on this page that opens this.
+  -->
+  <div id="shared-banner" class="shared-banner" hidden>
+    <span class="shared-banner__text"></span>
+    <button id="dismiss-shared" type="button" aria-label="Dismiss">&times;</button>
+  </div>
+  <div id="history-modal" class="history-overlay" hidden aria-hidden="true">
+    <div class="history-panel">
+      <div class="history-panel-head">
+        <h2 id="history-title" class="history-title">History</h2>
+        <button id="history-close" class="history-close" type="button" aria-label="Close history">&times;</button>
+      </div>
+      <div id="history-list" class="history-list"></div>
+    </div>
+  </div>
+  <button id="history-btn" type="button" hidden aria-hidden="true" tabindex="-1"></button>
+
+  <script src="../locales/en.js"></script>
+  <script src="../locales/es.js"></script>
+  <script src="../lib/i18n.js"></script>
+  <!-- room.js must run before app.js: it defines window.ccClassroom, which
+       app.js reads at module scope to switch into classroom behaviour. -->
+  <script src="room.js"></script>
+  <script src="../app.js"></script>
+</body>
+</html>
