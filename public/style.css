@@ -223,6 +223,39 @@ body {
   color: var(--muted);
 }
 
+/* ── Claim length counter ─────────────────────── */
+
+/* Helper text and counter share a row, with the counter pinned right. It wraps
+   to its own line on narrow screens rather than squeezing the helper text. */
+.claim-meta {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.claim-meta .helper-text {
+  flex: 1 1 220px;
+  margin-bottom: 0;
+}
+
+.char-counter {
+  margin-top: 8px;
+  flex: 0 0 auto;
+  font-size: 0.8125rem;
+  /* Tabular figures stop the counter jittering sideways as digits change. */
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+
+/* Over the limit. Colour is the fast signal, but it is not the only one — the
+   Analyze button also refuses and states the limit in words, so this reads the
+   same to anyone who cannot distinguish the two colours. */
+.char-counter--over {
+  color: #dc2626;
+  font-weight: 600;
+}
+
 /* ── Field error ──────────────────────────────── */
 .field-error {
   margin-top: 8px;
@@ -517,6 +550,7 @@ body {
   border-radius: 8px;
 }
 .snapshot-flag--ok   { background: #f0fdf4; color: #15803d; }
+.snapshot-flag--note { background: #eff6ff; color: #1d4ed8; }
 .snapshot-flag--warn { background: #fffbeb; color: #b45309; }
 .snapshot-flag__icon { font-weight: 700; }
 .snapshot-card__foot {
@@ -606,6 +640,74 @@ body {
 .cred--unknown  { background: #f9fafb; color: #9ca3af; }
 .cred--unknown  .cred-dot { background: #d1d5db; }
 
+/* Source type — WHAT KIND of source, a separate axis from credibility above.
+   Outlined rather than filled so the two badges never read as one rating. */
+.srctype {
+  display: inline-flex;
+  align-items: center;
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 2px 8px;
+  border-radius: 3px;
+  border: 1px solid currentColor;
+  background: transparent;
+  flex-shrink: 0;
+}
+.srctype--scholarly  { color: #7e22ce; }
+.srctype--official   { color: #0f766e; }
+.srctype--reporting  { color: #1d4ed8; }
+.srctype--interested { color: #b45309; }
+.srctype--other      { color: #9ca3af; }
+
+/* ── Relevance ────────────────────────────────── */
+/* A source that answers a nearby question rather than the claim itself. Marked
+   inline, where the student reads the source, not tucked into a badge row. */
+.evidence-item--indirect { opacity: 0.92; }
+.relevance-flag {
+  font-size: 0.8rem;
+  line-height: 1.5;
+  margin: 6px 0 0;
+  padding: 6px 9px;
+  border-left: 3px solid #f59e0b;
+  background: #fffbeb;
+  border-radius: 0 5px 5px 0;
+  color: var(--text);
+}
+.relevance-flag--background { border-left-color: #9ca3af; background: #f9fafb; }
+.relevance-flag__label { font-weight: 700; color: #b45309; }
+.relevance-flag--background .relevance-flag__label { color: #6b7280; }
+
+.filter-notice--relevance { border-color: #fbbf24; }
+
+/* ── Academic filter notice ───────────────────── */
+.filter-notice {
+  border: 1px solid #fcd34d;
+  background: #fffbeb;
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin: 4px 0;
+}
+.filter-notice__head {
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: #b45309;
+  margin: 0 0 4px;
+}
+.filter-notice__body {
+  font-size: 0.82rem;
+  line-height: 1.5;
+  color: var(--text);
+  margin: 0;
+}
+.filter-notice__domains {
+  font-size: 0.76rem;
+  color: var(--muted);
+  margin: 6px 0 0;
+  word-break: break-word;
+}
+
 /* ── Reflection questions ─────────────────────── */
 .reflection-list {
   list-style: disc;
@@ -626,7 +728,21 @@ body {
   margin-bottom: 10px;
 }
 .identity--flagged .identity-badge { background: #fff7ed; color: #c2410c; }
+.identity--about   .identity-badge { background: #eff6ff; color: #1d4ed8; }
 .identity--clean   .identity-badge { background: #f0fdf4; color: #15803d; }
+
+.identity-subtitle {
+  font-size: 0.8rem;
+  color: var(--muted);
+  line-height: 1.5;
+  margin: -2px 0 10px;
+}
+.identity-readout {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--muted);
+  margin: 0 0 10px;
+}
 
 .identity-analysis { font-size: 0.9rem; color: var(--text); line-height: 1.6; }
 
@@ -1431,6 +1547,7 @@ body {
 [data-theme="dark"] .confidence-pill--medium { background: #451a03; color: #fcd34d; border-color: #78350f; }
 [data-theme="dark"] .confidence-pill--low    { background: #450a0a; color: #fca5a5; border-color: #7f1d1d; }
 [data-theme="dark"] .snapshot-flag--ok   { background: #052e16; color: #86efac; }
+[data-theme="dark"] .snapshot-flag--note { background: #172554; color: #93c5fd; }
 [data-theme="dark"] .snapshot-flag--warn { background: #422006; color: #fcd34d; }
 
 [data-theme="dark"] .error-banner { background: #2d1515; border-color: #7f1d1d; color: #fca5a5; }
@@ -1479,7 +1596,22 @@ body {
 [data-theme="dark"] .cred--low     { background: #1f2937; color: #6b7280; }
 [data-theme="dark"] .cred--unknown { background: #1f2937; color: #6b7280; }
 
+[data-theme="dark"] .srctype--scholarly  { color: #d8b4fe; }
+[data-theme="dark"] .srctype--official   { color: #5eead4; }
+[data-theme="dark"] .srctype--reporting  { color: #93c5fd; }
+[data-theme="dark"] .srctype--interested { color: #fcd34d; }
+[data-theme="dark"] .srctype--other      { color: #6b7280; }
+
+[data-theme="dark"] .filter-notice { background: #422006; border-color: #92400e; }
+[data-theme="dark"] .filter-notice__head { color: #fcd34d; }
+
+[data-theme="dark"] .relevance-flag { background: #2a1f07; border-left-color: #b45309; }
+[data-theme="dark"] .relevance-flag__label { color: #fcd34d; }
+[data-theme="dark"] .relevance-flag--background { background: #1f2937; border-left-color: #4b5563; }
+[data-theme="dark"] .relevance-flag--background .relevance-flag__label { color: #9ca3af; }
+
 [data-theme="dark"] .identity--flagged .identity-badge { background: #431407; color: #fdba74; }
+[data-theme="dark"] .identity--about   .identity-badge { background: #172554; color: #93c5fd; }
 [data-theme="dark"] .identity--clean   .identity-badge { background: #14532d; color: #86efac; }
 [data-theme="dark"] .identity-caution { color: #fb923c; }
 

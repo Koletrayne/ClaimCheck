@@ -190,6 +190,25 @@
 .cc-meter--low .cc-meter__fill { background: #d97706; }
 .cc-meter--empty .cc-meter__fill { background: #dc2626; }
 
+/* ── This student's remaining ClaimChecks ─────────── */
+
+/* Sits beside the shared class meter but reads as a personal figure. It
+   deliberately shows a count rather than a bar: "8 of 12 remaining" is a number
+   a student can act on, where a second bar next to the class one just looks
+   like more of the same. */
+.cc-claims {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+  padding: 3px 9px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.cc-claims--low  { color: #b45309; border-color: #f59e0b; }
+.cc-claims--out  { color: #b91c1c; border-color: #ef4444; }
+
 /* ── Dashboard ────────────────────────────────────── */
 
 .cc-panel { margin-bottom: 18px; }

@@ -41,7 +41,7 @@
     input: {
       claimPlaceholder: 'e.g. "Drinking coffee reduces the risk of type 2 diabetes."',
       claimAria: 'Claim to check',
-      claimHelper: 'Paste a claim, headline, statistic, or short paragraph. Max 8,000 characters.',
+      claimHelper: 'Paste a claim, headline, statistic, or short paragraph.',
       urlPlaceholder: 'https://example.com/news/article',
       urlAria: 'Article URL to analyze',
       urlHelper: 'Paste a link to a news article or web page. ClaimCheck reads the page, identifies the main claim, and evaluates it.',
@@ -150,6 +150,20 @@
       notConfigured: 'The analysis service is not configured. Set ANTHROPIC_API_KEY in the backend .env file.',
       backendUnreachable: 'Could not reach the ClaimCheck backend. Make sure it is running.',
       generic: 'Something went wrong while checking this claim. Please try again.',
+
+      // Usage guardrails. {max} and {limit} are filled from the server's own
+      // numbers, so changing a limit in the environment changes the copy too and
+      // these strings never quietly go stale.
+      claimTooLong: 'Claims can be up to {max} characters. Try narrowing this down to the specific statement you want to verify.',
+      studentLimit: "You've reached the {limit}-claim limit for this classroom session. Ask your instructor if you need additional ClaimChecks.",
+      studentLimitGeneric: "You've used all of your ClaimChecks for this classroom session. Ask your instructor if you need more.",
+      classroomLimit: 'This classroom has reached its ClaimCheck usage limit. Please ask your instructor for assistance.',
+      globalLimit: 'ClaimCheck is temporarily unavailable because the usage limit has been reached. Please try again later or contact your instructor.',
+      usageUnverified: 'ClaimCheck is temporarily unable to verify usage limits. Please try again shortly.',
+    },
+
+    classroom: {
+      claimsRemaining: '{remaining} of {limit} ClaimChecks remaining',
     },
 
     results: {
@@ -204,10 +218,50 @@
       titleUnknown: 'Credibility could not be determined from available signals.',
     },
 
+    sourceType: {
+      peer_reviewed: 'Academic Journal',
+      preprint: 'Preprint',
+      government: 'Government Report',
+      intergovernmental: 'International Body',
+      academic_institution: 'University Research',
+      news: 'News Report',
+      fact_check: 'Fact Check',
+      advocacy: 'Advocacy Group',
+      industry: 'Industry Source',
+      other: 'Other Source',
+      title: {
+        peer_reviewed: 'Published in a peer-reviewed academic journal — reviewed by other experts before publication.',
+        preprint: 'Posted to a preprint server and NOT yet peer-reviewed. Treat the findings as provisional.',
+        government: 'Published by a government agency — its own data, reports, or statistics.',
+        intergovernmental: 'Published by a body made up of multiple governments, such as the WHO, UN, or OECD.',
+        academic_institution: 'Published by a university or research institute, but not in a peer-reviewed journal.',
+        news: 'A news organization reporting the story. Ask what original source it is reporting on.',
+        fact_check: 'A dedicated fact-checking organization that investigates claims.',
+        advocacy: 'An organization that exists to promote a position — a think tank, campaign group, or trade association.',
+        industry: 'A company or business publishing about its own product or sector.',
+        other: 'The kind of source could not be determined.',
+      },
+    },
+
+    relevance: {
+      related: 'Answers a related question, not this claim:',
+      background: 'Background on the topic — does not test this claim:',
+      noticeHead: 'No source tests this claim directly',
+      noticeBody: 'Every source found answers a related but different question, so this verdict is provisional. Read what each source actually addresses before drawing a conclusion.',
+    },
+
+    filter: {
+      headOne: 'Academic mode removed 1 source',
+      headOther: 'Academic mode removed {n} sources',
+      body: 'These sources fell outside the scholarly, government, and intergovernmental record academic mode is limited to. Turn academic mode off to see what they said.',
+      domains: 'Removed from: {domains}',
+    },
+
     snapshot: {
       labelQuick: 'Quick Snapshot',
       label: 'Snapshot',
-      identityFlagged: 'Identity-targeting language flagged — see the Identity Lens.',
+      identityFlagged: 'The claim itself targets an identity group — see the Identity Lens.',
+      identityAbout: 'This claim is about identity, but does not itself target a group.',
       noConcern: 'No identity-targeting or major concern flags.',
       footSupporting: '{n} supporting',
       footContradicting: '{n} contradicting',
@@ -216,8 +270,13 @@
 
     identity: {
       title: 'Identity Lens',
-      flagged: 'Identity targeting detected',
-      clean: 'No identity targeting detected',
+      subtitle: 'Two separate questions: is the claim about identity, and does the claim itself target a group? A claim can report on hate without containing it.',
+      readout: 'About identity: {about} · Targets a group: {targeting}',
+      yes: 'Yes',
+      no: 'No',
+      flagged: 'The claim targets an identity group',
+      about: 'About identity — no targeting language',
+      clean: 'Not identity-related',
       groups: 'Groups referenced',
       patterns: 'Patterns observed',
       patternFallback: 'Pattern',

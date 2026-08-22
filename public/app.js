@@ -27,6 +27,7 @@ const historyModal   = document.getElementById('history-modal');
 const historyClose   = document.getElementById('history-close');
 const historyListEl  = document.getElementById('history-list');
 const langSelect     = document.getElementById('lang-select');
+const charCounter    = document.getElementById('char-counter');
 
 /* ── Classroom Mode ────────────────────────────────── */
 // Set by public/classroom/room.js BEFORE this file loads, and absent on the
@@ -37,6 +38,50 @@ const langSelect     = document.getElementById('lang-select');
 // with the anonymous session token attached, nothing is written to history or
 // the cloud, and shared-result links are ignored.
 const CLASSROOM = window.ccClassroom || null;
+
+/* ── Claim length limit ────────────────────────────── */
+
+// The cap the claim box enforces. This local value keeps the counter honest
+// before the server has answered; /api/limits then supplies the configured
+// number so one environment variable drives both sides. The server re-checks
+// the length on every request regardless — this copy exists to give immediate
+// feedback, not to be trusted.
+const DEFAULT_MAX_CLAIM_CHARS = 750;
+let maxClaimChars = DEFAULT_MAX_CLAIM_CHARS;
+
+(async function loadLimits() {
+  try {
+    const res = await fetch('/api/limits');
+    if (!res.ok) return;
+    const data = await res.json();
+    const max = Number(data && data.maxClaimCharacters);
+    if (Number.isFinite(max) && max > 0) {
+      maxClaimChars = max;
+      updateCharCounter();
+    }
+  } catch {
+    // Offline or an older backend: the built-in default stands, and the server
+    // remains the authority either way.
+  }
+})();
+
+/**
+ * Redraws the live `243 / 750` counter under the claim box.
+ *
+ * Counts UTF-16 code units, matching String.length on the server, so the two
+ * agree exactly on where the boundary falls even for emoji and accented text.
+ */
+function updateCharCounter() {
+  if (!charCounter) return;
+  const used = claimInput.value.length;
+  const over = used > maxClaimChars;
+
+  charCounter.textContent = `${used.toLocaleString(window.ccI18n.locale())} / ${maxClaimChars.toLocaleString(window.ccI18n.locale())}`;
+  charCounter.classList.toggle('char-counter--over', over);
+  // Only announced once the limit is passed. A counter that speaks on every
+  // keystroke makes the box unusable with a screen reader.
+  charCounter.setAttribute('aria-live', over ? 'polite' : 'off');
+}
 
 /* ── Localization ──────────────────────────────────── */
 // Thin wrappers over the shared i18n core so call sites stay terse.
@@ -285,6 +330,7 @@ function loadHistoryEntry(entry) {
     urlInput.value = typeof entry.url === 'string' ? entry.url : '';
   } else {
     claimInput.value = typeof entry.claim === 'string' ? entry.claim : '';
+    updateCharCounter();
   }
 
   const snapshot = Boolean(entry.snapshot || (entry.data && entry.data._meta && entry.data._meta.snapshot));
@@ -350,6 +396,12 @@ claimInput.addEventListener('keydown', (e) => {
   if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') startCheck();
 });
 
+// 'input' rather than 'keyup' so pasting, dragging text in, undo, and speech
+// input all move the counter — the ways a claim most often gets too long are
+// the ways that never touch a key.
+claimInput.addEventListener('input', updateCharCounter);
+updateCharCounter();
+
 urlInput.addEventListener('keydown', (e) => {
   if (e.key === 'Enter') { e.preventDefault(); startCheck(); }
 });
@@ -388,7 +440,19 @@ function setInputMode(mode) {
   (isUrl ? urlInput : claimInput).focus();
 }
 
+/**
+ * True while a request is in flight or waiting on the prediction gate.
+ *
+ * The disabled Analyze button is not sufficient on its own: Ctrl+Enter in the
+ * claim box and Enter in the URL box both call startCheck() directly and never
+ * consult the button, so an impatient double-tap used to fire a second analysis
+ * — and in a classroom that is a second ClaimCheck deducted for one question.
+ * This flag closes every path at once.
+ */
+let analysisInFlight = false;
+
 function startCheck() {
+  if (analysisInFlight) return;
   if (inputMode === 'url') checkUrl();
   else checkClaim();
 }
@@ -423,12 +487,23 @@ function checkClaim() {
     claimInput.focus();
     return;
   }
+  // Refused here so an over-long claim never reaches the network — a validation
+  // error must not cost the student one of their ClaimChecks. The server
+  // enforces the same cap for anything that skips this check.
+  if (text.length > maxClaimChars) {
+    showFieldError(t('errors.claimTooLong', { max: maxClaimChars }));
+    updateCharCounter();
+    claimInput.focus();
+    return;
+  }
 
   const academic = academicToggle.checked;
   const snapshot = snapshotToggle.checked;
   const contextLens = contextToggle.checked;
   const language = currentLang;
   lastRequest = { mode: 'claim', text, url: '', academic, snapshot, contextLens, language };
+
+  analysisInFlight = true;
 
   // Kick off the analysis right away so the prediction step adds no latency.
   currentAnalysis = runAnalysis(text, academic, snapshot, contextLens, language);
@@ -466,6 +541,8 @@ function checkUrl() {
   const language = currentLang;
   lastRequest = { mode: 'url', text: '', url, academic, snapshot, contextLens, language };
 
+  analysisInFlight = true;
+
   // No prediction gate in URL mode — the user hasn't seen the claim yet.
   currentAnalysis = runUrlAnalysis(url, academic, snapshot, contextLens, language);
   currentAnalysis.catch(() => {});
@@ -493,7 +570,56 @@ function analysisRequest(path) {
   const headers = { 'Content-Type': 'application/json' };
   if (!CLASSROOM) return { url: path, headers };
   headers['X-Classroom-Session'] = CLASSROOM.token;
+  // The anonymous per-classroom id, so the backend can count this student's
+  // ClaimChecks. Sent as a lookup key only: the server decides how many have
+  // been used and what the cap is, and ignores anything this page thinks.
+  if (CLASSROOM.studentId) headers['X-Claimcheck-Student'] = CLASSROOM.studentId;
   return { url: `/api/classroom${path}`, headers };
+}
+
+/* ── Usage limits ──────────────────────────────────── */
+
+// Refused because a usage budget is exhausted, rather than because something
+// went wrong. Each maps to its own translated message.
+const USAGE_LIMIT_CODES = new Set(['STUDENT_LIMIT', 'CLASSROOM_LIMIT', 'GLOBAL_LIMIT', 'USAGE_UNVERIFIED']);
+
+/**
+ * Turns a limit refusal into the message the user should read.
+ *
+ * Translated locally from the server's `code` so a Spanish-language student
+ * gets Spanish. The server's own English text is the fallback for a code this
+ * build does not recognise, which keeps a newer backend intelligible to an
+ * older page.
+ */
+function usageLimitMessage(data) {
+  const code = data && data.code;
+  switch (code) {
+    case 'STUDENT_LIMIT': {
+      const limit = (data._usage && data._usage.student && data._usage.student.limit) || 0;
+      return limit > 0 ? t('errors.studentLimit', { limit }) : t('errors.studentLimitGeneric');
+    }
+    case 'CLASSROOM_LIMIT':   return t('errors.classroomLimit');
+    case 'GLOBAL_LIMIT':      return t('errors.globalLimit');
+    case 'USAGE_UNVERIFIED':  return t('errors.usageUnverified');
+    default:                return (data && data.error) || t('errors.generic');
+  }
+}
+
+/**
+ * Handles a non-OK analysis response that was a budget or length refusal.
+ * Returns the message to show, or null when this was an ordinary failure.
+ */
+function limitRefusal(data) {
+  if (!data || !data.code) return null;
+
+  if (data.code === 'CLAIM_TOO_LONG') {
+    return t('errors.claimTooLong', { max: Number(data.maxClaimCharacters) || maxClaimChars });
+  }
+  if (USAGE_LIMIT_CODES.has(data.code)) {
+    if (CLASSROOM && typeof CLASSROOM.onLimitReached === 'function') CLASSROOM.onLimitReached(data);
+    return usageLimitMessage(data);
+  }
+  return null;
 }
 
 /** Hands the classroom UI its budget meter and any PII warning. */
@@ -519,6 +645,8 @@ async function runUrlAnalysis(url, academic, snapshot, contextLens, language) {
   }
 
   if (!res.ok) {
+    const refusal = limitRefusal(data);
+    if (refusal) throw new Error(refusal);
     throw new Error(data && data.error ? data.error : t('errors.analysisFailed', { status: res.status }));
   }
   reportClassroomMeta(data);
@@ -541,6 +669,9 @@ async function runAnalysis(text, academic, snapshot, contextLens, language) {
   }
 
   if (!res.ok) {
+    const refusal = limitRefusal(data);
+    if (refusal) throw new Error(refusal);
+
     const msg = data && data.error ? data.error : t('errors.analysisFailed', { status: res.status });
     if (res.status === 500 && msg.includes('ANTHROPIC_API_KEY')) {
       console.error('[ClaimCheck] Missing API key:', msg);
@@ -602,6 +733,10 @@ async function settleAnalysis() {
       showApiError(msg || t('errors.generic'));
     }
   } finally {
+    // Cleared here rather than at the fetch boundary so it also covers the
+    // prediction gate, which holds a kicked-off analysis open while the user
+    // decides.
+    analysisInFlight = false;
     setLoading(false);
   }
 }
@@ -664,6 +799,7 @@ function toggleLibrary() {
 function loadStarterClaim(text) {
   setInputMode('claim');
   claimInput.value = text;
+  updateCharCounter();
   libraryPanel.hidden = true;
   libraryToggle.setAttribute('aria-expanded', 'false');
   libraryToggle.classList.remove('library__toggle--open');
@@ -752,9 +888,9 @@ function renderResults(data, opts = {}) {
       t('results.contradicting'),
       Array.isArray(data.contradicting_evidence) ? data.contradicting_evidence : []
     ));
-    // Surface identity concerns even in snapshot mode, but only when flagged.
-    if (data.identity_lens && (data.identity_lens.targets_identity ||
-        (Array.isArray(data.identity_lens.patterns_observed) && data.identity_lens.patterns_observed.length))) {
+    // Surface the Identity Lens in snapshot mode only when identity is actually
+    // in play — either the claim is about it or the claim itself targets a group.
+    if (data.identity_lens && identityFlags(data.identity_lens).about) {
       resultsEl.appendChild(makeIdentityLensSection(data.identity_lens));
     }
     resultsEl.appendChild(makeRunFullButton());
@@ -831,6 +967,15 @@ function renderResults(data, opts = {}) {
     verdictSec.appendChild(unc);
   }
   resultsEl.appendChild(verdictSec);
+
+  // 3b. Tell the student when the verdict could not be pinned to a source that
+  // tests the claim, or when academic mode narrowed the evidence — rather than
+  // letting either happen silently.
+  const relevanceNotice = makeRelevanceNotice(data);
+  if (relevanceNotice) resultsEl.appendChild(relevanceNotice);
+
+  const filterNotice = makeAcademicFilterNotice(data);
+  if (filterNotice) resultsEl.appendChild(filterNotice);
 
   // 4. Supporting evidence
   resultsEl.appendChild(makeEvidenceSection(
@@ -938,7 +1083,7 @@ function makeSnapshotCard(data, isSnapshot) {
   const flag = el('div', `snapshot-flag snapshot-flag--${concern.level}`);
   const ficon = el('span', 'snapshot-flag__icon');
   ficon.setAttribute('aria-hidden', 'true');
-  ficon.textContent = concern.level === 'warn' ? '⚠' : '✓';
+  ficon.textContent = { warn: '⚠', note: 'ⓘ' }[concern.level] || '✓';
   const ftext = el('span', 'snapshot-flag__text');
   ftext.textContent = concern.text;
   flag.appendChild(ficon);
@@ -959,16 +1104,28 @@ function makeSnapshotCard(data, isSnapshot) {
   return card;
 }
 
+// The Identity Lens answers two separate questions, and only the second is a
+// concern. Results saved before the split carry a single `targets_identity`
+// boolean, which conflated them — read it as the targeting answer.
+function identityFlags(lens) {
+  const l = lens && typeof lens === 'object' ? lens : {};
+  const patterns = Array.isArray(l.patterns_observed) ? l.patterns_observed.filter(Boolean) : [];
+  const legacy = Boolean(l.targets_identity);
+  const targeting = (typeof l.contains_targeting === 'boolean' ? l.contains_targeting : legacy)
+    || patterns.length > 0;
+  const about = typeof l.about_identity === 'boolean' ? l.about_identity : (legacy || targeting);
+  return { about: about || targeting, targeting, patterns };
+}
+
 function deriveConcern(data) {
-  const lens = data.identity_lens || {};
-  const flagged = Boolean(lens.targets_identity) ||
-    (Array.isArray(lens.patterns_observed) && lens.patterns_observed.length > 0);
-  if (flagged) {
+  const { about, targeting } = identityFlags(data.identity_lens);
+  if (targeting) {
     return { level: 'warn', text: t('snapshot.identityFlagged') };
   }
   const ctx = data.contextLens || data.context_lens || {};
   const warn = strOrEmpty(ctx.contextWarning);
-  if (warn) return { level: 'warn', text: warn };
+  if (warn) return { level: 'note', text: warn };
+  if (about) return { level: 'note', text: t('snapshot.identityAbout') };
   return { level: 'ok', text: t('snapshot.noConcern') };
 }
 
@@ -994,6 +1151,7 @@ function rerunAsFull(btn) {
   } else {
     setInputMode('claim');
     claimInput.value = lastResult.claim || '';
+    updateCharCounter();
   }
   academicToggle.checked = Boolean(lastResult.academic);
   btn.disabled = true;
@@ -1124,13 +1282,34 @@ function makeEvidenceSection(title, items) {
 }
 
 function makeEvidenceItem(item) {
-  const li = el('li', 'evidence-item');
+  const rel = normalizeRelevance(item.relevance);
+  const li = el('li', `evidence-item${rel && rel !== 'direct' ? ' evidence-item--indirect' : ''}`);
 
   const summary = el('p', 'evidence-summary');
   summary.textContent = item.summary || '';
   li.appendChild(summary);
 
+  // A source that does not test the claim gets called out where the student
+  // reads it, not buried in a badge — filing near-misses as plain supporting or
+  // contradicting evidence is what confused the pilot classes.
+  if (rel && rel !== 'direct') {
+    const flag = el('p', `relevance-flag relevance-flag--${rel}`);
+    const label = el('span', 'relevance-flag__label');
+    label.textContent = t(`relevance.${rel}`);
+    flag.appendChild(label);
+    const addresses = strOrEmpty(item.addresses);
+    if (addresses) {
+      flag.appendChild(document.createTextNode(' '));
+      const what = el('span', 'relevance-flag__what');
+      what.textContent = addresses;
+      flag.appendChild(what);
+    }
+    li.appendChild(flag);
+  }
+
   const row = el('div', 'evidence-source-row');
+  // Two independent signals: what kind of source it is, then how rigorous it is.
+  row.appendChild(buildTypeBadge(item.source_type));
   row.appendChild(buildCredBadge(item.credibility_tier));
 
   if (item.source_url) {
@@ -1154,6 +1333,83 @@ function makeEvidenceItem(item) {
   }
 
   return li;
+}
+
+function makeRelevanceNotice(data) {
+  const rel = data._meta && data._meta.relevance;
+  if (!rel || !rel.verdict_rests_on_indirect) return null;
+
+  const box = el('div', 'filter-notice filter-notice--relevance');
+  const head = el('p', 'filter-notice__head');
+  head.textContent = t('relevance.noticeHead');
+  box.appendChild(head);
+
+  const body = el('p', 'filter-notice__body');
+  body.textContent = t('relevance.noticeBody');
+  box.appendChild(body);
+  return box;
+}
+
+function makeAcademicFilterNotice(data) {
+  const removed = data._meta && Array.isArray(data._meta.filtered_sources) ? data._meta.filtered_sources : [];
+  if (!removed.length) return null;
+
+  const box = el('div', 'filter-notice');
+  const head = el('p', 'filter-notice__head');
+  head.textContent = t(removed.length === 1 ? 'filter.headOne' : 'filter.headOther', { n: removed.length });
+  box.appendChild(head);
+
+  const body = el('p', 'filter-notice__body');
+  body.textContent = t('filter.body');
+  box.appendChild(body);
+
+  // Naming the domains is the point — the student can go look at them directly
+  // and decide for themselves whether academic mode was right to exclude them.
+  const domains = [...new Set(removed.map(r => r && r.domain).filter(Boolean))];
+  if (domains.length) {
+    const list = el('p', 'filter-notice__domains');
+    list.textContent = t('filter.domains', { domains: domains.join(', ') });
+    box.appendChild(list);
+  }
+  return box;
+}
+
+// Source types share a colour family by character: scholarly evidence, official
+// bodies, reporting, then interested parties. Grouping them this way lets a
+// student see the shape of the evidence base without reading every label.
+const SOURCE_TYPE_GROUPS = {
+  peer_reviewed: 'scholarly',
+  preprint: 'scholarly',
+  academic_institution: 'scholarly',
+  government: 'official',
+  intergovernmental: 'official',
+  news: 'reporting',
+  fact_check: 'reporting',
+  advocacy: 'interested',
+  industry: 'interested',
+  other: 'other',
+};
+
+function normalizeSourceType(raw) {
+  const t = String(raw || '').trim().toLowerCase();
+  return Object.prototype.hasOwnProperty.call(SOURCE_TYPE_GROUPS, t) ? t : '';
+}
+
+// Returns '' for results saved before relevance existed, so they render exactly
+// as they always did rather than picking up a label nothing actually assessed.
+function normalizeRelevance(raw) {
+  const r = String(raw || '').trim().toLowerCase();
+  return ['direct', 'related', 'background'].includes(r) ? r : '';
+}
+
+function buildTypeBadge(rawType) {
+  const type = normalizeSourceType(rawType);
+  // Results saved before source_type existed simply show no type badge.
+  if (!type || type === 'other') return document.createDocumentFragment();
+  const span = el('span', `srctype srctype--${SOURCE_TYPE_GROUPS[type]}`);
+  span.textContent = t(`sourceType.${type}`);
+  span.title = t(`sourceType.title.${type}`);
+  return span;
 }
 
 function buildCredBadge(rawTier) {
@@ -1181,18 +1437,29 @@ function buildCredBadge(rawTier) {
 }
 
 function makeIdentityLensSection(lens) {
-  const groups   = Array.isArray(lens.identity_groups)   ? lens.identity_groups.filter(Boolean)   : [];
-  const patterns = Array.isArray(lens.patterns_observed) ? lens.patterns_observed.filter(Boolean) : [];
-  const flagged  = Boolean(lens.targets_identity) || patterns.length > 0;
+  const groups = Array.isArray(lens.identity_groups) ? lens.identity_groups.filter(Boolean) : [];
+  const { about, targeting, patterns } = identityFlags(lens);
+  const state = targeting ? 'flagged' : (about ? 'about' : 'clean');
 
-  const sec = el('div', `section identity--${flagged ? 'flagged' : 'clean'}`);
+  const sec = el('div', `section identity--${state}`);
   const titleEl = el('p', 'section-title');
   titleEl.textContent = t('identity.title');
   sec.appendChild(titleEl);
 
+  const subtitle = el('p', 'identity-subtitle');
+  subtitle.textContent = t('identity.subtitle');
+  sec.appendChild(subtitle);
+
   const badge = el('span', 'identity-badge');
-  badge.textContent = flagged ? t('identity.flagged') : t('identity.clean');
+  badge.textContent = t(`identity.${state}`);
   sec.appendChild(badge);
+
+  const readout = el('p', 'identity-readout');
+  readout.textContent = t('identity.readout', {
+    about: t(about ? 'identity.yes' : 'identity.no'),
+    targeting: t(targeting ? 'identity.yes' : 'identity.no'),
+  });
+  sec.appendChild(readout);
 
   if (lens.analysis) {
     const analysis = el('p', 'identity-analysis');
@@ -1238,7 +1505,7 @@ function makeIdentityLensSection(lens) {
     sec.appendChild(sub);
   }
 
-  if (flagged && lens.caution_note && String(lens.caution_note).trim()) {
+  if (targeting && lens.caution_note && String(lens.caution_note).trim()) {
     const caution = el('p', 'identity-caution');
     caution.textContent = lens.caution_note;
     sec.appendChild(caution);
@@ -1625,6 +1892,7 @@ function loadFromHash() {
     urlInput.value = typeof state.url === 'string' ? state.url : '';
   } else {
     claimInput.value = typeof state.claim === 'string' ? state.claim : '';
+    updateCharCounter();
   }
   const snapshot = Boolean(state.snapshot || (state.data && state.data._meta && state.data._meta.snapshot));
   const contextLens = resolveContextPref(state, state.data);

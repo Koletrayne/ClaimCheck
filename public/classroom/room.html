@@ -74,6 +74,9 @@
             <span id="cc-meter-fill" class="cc-meter__fill" style="width:100%"></span>
           </span>
         </span>
+        <!-- This student's own remaining ClaimChecks. Filled in by room.js from
+             the server's count; hidden until the server has sent one. -->
+        <span id="cc-claims" class="cc-claims" hidden></span>
       </div>
     </div>
 
@@ -104,12 +107,14 @@
           placeholder='e.g. "Drinking coffee reduces the risk of type 2 diabetes."'
           data-i18n-placeholder="input.claimPlaceholder"
           rows="5"
-          maxlength="8000"
           aria-label="Claim to check"
           data-i18n-aria-label="input.claimAria"
           spellcheck="true"
         ></textarea>
-        <p class="helper-text" data-i18n="input.claimHelper">Paste a claim, headline, statistic, or short paragraph. Max 8,000 characters.</p>
+        <div class="claim-meta">
+          <p class="helper-text" data-i18n="input.claimHelper">Paste a claim, headline, statistic, or short paragraph.</p>
+          <span id="char-counter" class="char-counter" aria-live="off"></span>
+        </div>
       </div>
 
       <div id="url-pane" class="input-pane" role="tabpanel" aria-labelledby="tab-url" hidden>
@@ -205,6 +210,9 @@
   <script src="../locales/en.js"></script>
   <script src="../locales/es.js"></script>
   <script src="../lib/i18n.js"></script>
+  <!-- student-id.js must run before room.js, which asks it for this
+       classroom's anonymous id while building window.ccClassroom. -->
+  <script src="../lib/student-id.js"></script>
   <!-- room.js must run before app.js: it defines window.ccClassroom, which
        app.js reads at module scope to switch into classroom behaviour. -->
   <script src="room.js"></script>

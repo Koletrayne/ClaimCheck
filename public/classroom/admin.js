@@ -164,6 +164,16 @@
       ['Remaining', numberFmt.format(room.tokensRemaining)],
       ['Analyses run', numberFmt.format(room.analysesRun)],
       ['Searches', numberFmt.format(room.searchesUsed)],
+      // Claim counts, the quota students are actually measured against. Still a
+      // whole-class figure: there is no per-student breakdown here, because
+      // linking usage back to a person is exactly what the anonymous id is
+      // designed to make impossible.
+      ['ClaimChecks used', room.effectiveClaimLimit
+        ? `${numberFmt.format(room.claimsUsed)} of ${numberFmt.format(room.effectiveClaimLimit)}`
+        : numberFmt.format(room.claimsUsed)],
+      ['Per student', room.effectiveClaimLimitPerStudent
+        ? numberFmt.format(room.effectiveClaimLimitPerStudent)
+        : 'Unlimited'],
     ]) {
       const stat = el('div', 'cc-stat');
       stat.appendChild(el('div', 'cc-stat__label', label));
@@ -325,6 +335,14 @@
     window.location.reload();
   });
 
+  /** Blank field -> null (use the default); anything else -> a number. */
+  function optionalCount(raw) {
+    const trimmed = String(raw || '').trim();
+    if (!trimmed) return null;
+    const n = Number(trimmed);
+    return Number.isFinite(n) && n >= 0 ? Math.floor(n) : null;
+  }
+
   createForm.addEventListener('submit', async (e) => {
     e.preventDefault();
     clearError(createError);
@@ -339,9 +357,15 @@
           displayName: $('create-name').value.trim(),
           tokenBudget: Number($('create-budget').value),
           expiresAt: new Date(Date.now() + minutes * 60 * 1000).toISOString(),
+          // Empty means "unset" rather than zero — the backend reads null as
+          // "fall back to the server default", and zero as "no limit".
+          claimLimitPerStudent: optionalCount($('create-per-student').value),
+          expectedStudents: optionalCount($('create-expected').value),
         },
       });
       $('create-name').value = '';
+      $('create-per-student').value = '';
+      $('create-expected').value = '';
       await refresh();
     } catch (err) {
       showError(createError, err.message);

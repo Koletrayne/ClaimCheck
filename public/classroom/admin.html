@@ -114,6 +114,24 @@
               <span class="cc-field__help">Shared by the whole class. Estimates are approximate.</span>
             </div>
           </div>
+          <!--
+            Optional claim quotas. Both are blank by default, which means "use
+            the server's configured limits" rather than a number frozen at
+            creation time — so raising the site-wide default lifts every
+            classroom that never set its own.
+          -->
+          <div class="cc-field-row">
+            <div class="cc-field">
+              <label class="cc-field__label" for="create-per-student">ClaimChecks per student (optional)</label>
+              <input id="create-per-student" type="number" min="0" max="1000" step="1" placeholder="Default" />
+              <span class="cc-field__help">How many claims one student may check. Leave blank for the default.</span>
+            </div>
+            <div class="cc-field">
+              <label class="cc-field__label" for="create-expected">Expected class size (optional)</label>
+              <input id="create-expected" type="number" min="0" max="1000" step="1" placeholder="Default" />
+              <span class="cc-field__help">Used to size the whole-class claim limit. A count only &mdash; no student details.</span>
+            </div>
+          </div>
           <button id="create-btn" class="btn-primary" type="submit">Create classroom</button>
         </form>
         <div id="create-error" class="cc-error" hidden role="alert"></div>

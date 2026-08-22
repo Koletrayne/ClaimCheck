@@ -42,7 +42,7 @@
     input: {
       claimPlaceholder: 'p. ej. "Tomar café reduce el riesgo de diabetes tipo 2."',
       claimAria: 'Afirmación por verificar',
-      claimHelper: 'Pega una afirmación, un titular, una estadística o un párrafo corto. Máximo 8,000 caracteres.',
+      claimHelper: 'Pega una afirmación, un titular, una estadística o un párrafo corto.',
       urlPlaceholder: 'https://ejemplo.com/noticias/articulo',
       urlAria: 'URL del artículo por analizar',
       urlHelper: 'Pega el enlace de una noticia o página web. ClaimCheck lee la página, identifica la afirmación principal y la evalúa.',
@@ -151,6 +151,18 @@
       notConfigured: 'El servicio de análisis no está configurado. Define ANTHROPIC_API_KEY en el archivo .env del backend.',
       backendUnreachable: 'No se pudo conectar con el backend de ClaimCheck. Asegúrate de que esté en ejecución.',
       generic: 'Algo salió mal al verificar esta afirmación. Inténtalo de nuevo.',
+
+      // Barreras de uso. {max} y {limit} vienen de los números del servidor.
+      claimTooLong: 'Las afirmaciones pueden tener hasta {max} caracteres. Intenta reducirlo a la afirmación específica que quieres verificar.',
+      studentLimit: 'Has alcanzado el límite de {limit} afirmaciones para esta sesión de clase. Pregunta a tu docente si necesitas más ClaimChecks.',
+      studentLimitGeneric: 'Has usado todos tus ClaimChecks para esta sesión de clase. Pregunta a tu docente si necesitas más.',
+      classroomLimit: 'Esta clase alcanzó su límite de uso de ClaimCheck. Pide ayuda a tu docente.',
+      globalLimit: 'ClaimCheck no está disponible temporalmente porque se alcanzó el límite de uso. Inténtalo más tarde o comunícate con tu docente.',
+      usageUnverified: 'ClaimCheck no puede verificar los límites de uso en este momento. Inténtalo de nuevo en unos minutos.',
+    },
+
+    classroom: {
+      claimsRemaining: '{remaining} de {limit} ClaimChecks disponibles',
     },
 
     results: {
@@ -205,10 +217,50 @@
       titleUnknown: 'No se pudo determinar la credibilidad con las señales disponibles.',
     },
 
+    sourceType: {
+      peer_reviewed: 'Revista académica',
+      preprint: 'Preprint',
+      government: 'Informe gubernamental',
+      intergovernmental: 'Organismo internacional',
+      academic_institution: 'Investigación universitaria',
+      news: 'Reportaje periodístico',
+      fact_check: 'Verificación de datos',
+      advocacy: 'Grupo de incidencia',
+      industry: 'Fuente de la industria',
+      other: 'Otra fuente',
+      title: {
+        peer_reviewed: 'Publicado en una revista académica revisada por pares — otros expertos la evaluaron antes de publicarla.',
+        preprint: 'Publicado en un servidor de preprints y AÚN NO revisado por pares. Considera los hallazgos como provisionales.',
+        government: 'Publicado por una agencia gubernamental — sus propios datos, informes o estadísticas.',
+        intergovernmental: 'Publicado por un organismo formado por varios gobiernos, como la OMS, la ONU o la OCDE.',
+        academic_institution: 'Publicado por una universidad o instituto de investigación, pero no en una revista revisada por pares.',
+        news: 'Un medio de comunicación que informa sobre el tema. Pregúntate sobre qué fuente original está informando.',
+        fact_check: 'Una organización dedicada a verificar afirmaciones.',
+        advocacy: 'Una organización que existe para promover una postura — un centro de estudios, un grupo de campaña o una asociación gremial.',
+        industry: 'Una empresa que publica sobre su propio producto o sector.',
+        other: 'No se pudo determinar el tipo de fuente.',
+      },
+    },
+
+    relevance: {
+      related: 'Responde a una pregunta relacionada, no a esta afirmación:',
+      background: 'Contexto sobre el tema — no pone a prueba esta afirmación:',
+      noticeHead: 'Ninguna fuente pone a prueba esta afirmación directamente',
+      noticeBody: 'Todas las fuentes encontradas responden a una pregunta relacionada pero distinta, así que este veredicto es provisional. Lee qué aborda realmente cada fuente antes de sacar una conclusión.',
+    },
+
+    filter: {
+      headOne: 'El modo académico eliminó 1 fuente',
+      headOther: 'El modo académico eliminó {n} fuentes',
+      body: 'Estas fuentes quedaron fuera del registro académico, gubernamental e intergubernamental al que se limita el modo académico. Desactiva el modo académico para ver qué decían.',
+      domains: 'Eliminadas de: {domains}',
+    },
+
     snapshot: {
       labelQuick: 'Vistazo rápido',
       label: 'Vistazo',
-      identityFlagged: 'Se detectó lenguaje dirigido a una identidad — consulta la Lente de identidad.',
+      identityFlagged: 'La afirmación misma ataca a un grupo de identidad — consulta la Lente de identidad.',
+      identityAbout: 'Esta afirmación trata sobre la identidad, pero no ataca a ningún grupo.',
       noConcern: 'Sin señales de ataque a la identidad ni otras preocupaciones importantes.',
       footSupporting: '{n} a favor',
       footContradicting: '{n} en contra',
@@ -217,8 +269,13 @@
 
     identity: {
       title: 'Lente de identidad',
-      flagged: 'Se detectó un ataque a la identidad',
-      clean: 'No se detectó ataque a la identidad',
+      subtitle: 'Dos preguntas distintas: ¿la afirmación trata sobre la identidad y la afirmación misma ataca a un grupo? Una afirmación puede informar sobre el odio sin contenerlo.',
+      readout: 'Trata sobre la identidad: {about} · Ataca a un grupo: {targeting}',
+      yes: 'Sí',
+      no: 'No',
+      flagged: 'La afirmación ataca a un grupo de identidad',
+      about: 'Trata sobre la identidad — sin lenguaje de ataque',
+      clean: 'No se relaciona con la identidad',
       groups: 'Grupos mencionados',
       patterns: 'Patrones observados',
       patternFallback: 'Patrón',

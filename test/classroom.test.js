@@ -181,10 +181,35 @@ test('remaining tokens never go negative', () => {
 test('the student view leaks no secret, code, or owner', () => {
   const view = c.publicView(makeClassroom());
   const keys = Object.keys(view);
-  for (const forbidden of ['session_secret', 'sessionSecret', 'access_code', 'accessCode', 'owner_id', 'ownerId', 'id']) {
+  for (const forbidden of ['session_secret', 'sessionSecret', 'access_code', 'accessCode', 'owner_id', 'ownerId']) {
     assert.ok(!keys.includes(forbidden), `student view must not expose ${forbidden}`);
   }
   assert.equal(JSON.stringify(view).includes(makeClassroom().session_secret), false);
+});
+
+test('the classroom id in the student view tells the student nothing new', () => {
+  // The id was added to publicView so the browser can scope its anonymous
+  // student id to one classroom. That is only acceptable because the student
+  // ALREADY has the id: it sits in the clear inside the session token they were
+  // handed at join, which is base64url, not encrypted. This test pins that
+  // justification — if the token ever stops carrying the id, exposing it here
+  // becomes a new disclosure and needs rethinking rather than re-blessing.
+  const room = makeClassroom();
+  const payload = c.mintSessionToken(room).split('.')[0];
+  const claims = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
+
+  assert.equal(c.publicView(room).id, room.id);
+  assert.equal(claims.c, room.id, 'the id must already be readable from the token');
+});
+
+test('the classroom id alone does not unlock a classroom', () => {
+  // Knowing the id is not authorization: every student route still requires a
+  // token signed with the classroom's secret, and RLS denies clients any read
+  // of the classrooms table.
+  const room = makeClassroom();
+  const forged = c.peekSessionToken(`${Buffer.from(JSON.stringify({ c: room.id, e: Date.now() + 60000, n: 'x' })).toString('base64url')}.notasignature`);
+
+  assert.equal(c.verifySessionToken(forged, room), false);
 });
 
 test('the owner view exposes the code but never the session secret', () => {

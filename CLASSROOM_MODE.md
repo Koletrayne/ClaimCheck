@@ -192,10 +192,56 @@ Backs the code-guessing throttle: `ip_hash`, `attempted_at`. Client addresses
 are stored as a **keyed HMAC digest, never in the clear**, and rows are pruned
 after 24 hours by `prune_classroom_code_attempts()`.
 
-### There is no student table
+### `classroom_student_usage`
 
-This is the central design decision. Anonymous sessions are stateless signed
-tokens, so no table exists that could accumulate student records.
+Added 2026-08-22 by the usage guardrails. One row per (classroom, anonymous
+student) holding a single integer: how many ClaimChecks that student has run in
+that classroom.
+
+| Column | Notes |
+|---|---|
+| `classroom_id` | FK to `classrooms`, `on delete cascade` |
+| `student_id` | The anonymous UUID minted in the student's browser |
+| `claims_used` | Integer counter, nothing else |
+| `created_at` / `updated_at` | Timestamps |
+
+Primary key `(classroom_id, student_id)`, which is also the only index the
+lookups need.
+
+### There is no student *identity* table
+
+The original design had no student table at all. That is no longer literally
+true, and this section is deliberately worded to say what changed rather than to
+keep an obsolete claim alive.
+
+What the usage table does and does not do:
+
+* It stores a **counter keyed by a random UUID**, and nothing else. No name, no
+  email, no IP, no device or browser fingerprint, no claim text, no results, no
+  timestamps of individual submissions — just a running total.
+* The UUID is generated in the student's browser by `crypto.randomUUID()`
+  (`public/lib/student-id.js`) and is **scoped to one classroom**. The same
+  browser joining a second classroom mints a second, unrelated id, so usage in
+  one classroom cannot be linked to usage in another.
+* Nothing in the system maps a UUID to a person. There is no lookup that turns
+  `7f3a6c…` into a student, because no such association is ever recorded.
+* Sessions are still stateless signed tokens. The usage row is not a session and
+  does not authenticate anything; presenting an unknown id simply creates a new
+  row with a zero counter.
+
+**What genuinely changed for privacy:** an identifier now survives a tab close,
+where previously nothing did. It lives in `localStorage` because a per-student
+limit that resets on every page refresh is not a limit. The identifier is
+random, per-classroom, and meaningless outside the counter it keys — but it is a
+persistent pseudonymous identifier, and the honest description of this system is
+"anonymous with a per-classroom usage pseudonym", not "stores nothing about
+students".
+
+**Shared-device consequence:** on a lab machine, the next student to join the
+*same* classroom in the *same* browser profile inherits the previous student's
+id and its spent allowance. That is a fairness cost, accepted because the
+alternative — clearing the id on leave — would let any student reset their own
+limit at will.
 
 ### Row Level Security
 
@@ -207,6 +253,8 @@ RLS is enabled on all three tables and was not disabled anywhere. Existing
 | `classrooms` | `SELECT` only, only rows where `owner_id = auth.uid()` **and** the caller is an allowlisted educator |
 | `classroom_educators` | `SELECT` only, only the caller's own row (cannot enumerate the list) |
 | `classroom_code_attempts` | No policies and all grants revoked — backend only |
+| `classroom_student_usage` | No policies and all grants revoked — backend only |
+| `global_usage` | No policies and all grants revoked — backend only |
 
 No `INSERT`/`UPDATE`/`DELETE` policy exists on any of these tables, so **every
 client write is denied by RLS**. All mutations go through the backend's service
@@ -222,7 +270,9 @@ it is not a database credential, only an argument to a backend route.
 
 ## 5. What student information is collected
 
-**In the database: none.**
+**In the database: one integer per student per classroom, keyed by a random
+UUID.** Nothing else. See `classroom_student_usage` above for why that counter
+exists and what it deliberately is not.
 
 The complete set of student-derived data anywhere in the system:
 
@@ -232,19 +282,29 @@ The complete set of student-derived data anywhere in the system:
 | Analysis result | Server memory, then the student's browser | Until the tab is closed or the page reloads | It is the answer being returned |
 | Session token | The tab's `sessionStorage` | Until the tab closes or the classroom ends | Proves which classroom the request belongs to |
 | Hashed client address | `classroom_code_attempts`, on **failed** code attempts only | ≤ 24 hours | Rate-limits code guessing |
+| Anonymous student id | The browser's `localStorage`, scoped per classroom | Until the browser's storage is cleared | Keys the per-student ClaimCheck counter |
+| ClaimChecks used | `classroom_student_usage`, keyed by that id | Until the classroom is deleted | Enforces the per-student limit |
 
-Nothing above identifies a student, and nothing above except the hashed address
-on a failed guess is ever written to disk.
+Nothing above identifies a student. The anonymous id and its counter are the
+only student-derived rows that reach disk, alongside the hashed address on a
+failed code guess.
 
 ## What is NOT collected
 
 - Student names, emails, usernames, or accounts
 - Student IDs, ages, birthdays, or grade levels
 - Passwords or credentials of any kind
-- Persistent student identifiers, or any identifier that survives a tab close
 - Per-student search history or claim history
 - Per-student analytics, behavioral profiles, or grades
-- Cross-session or cross-classroom identifiers
+- Cross-classroom identifiers (the anonymous id is per classroom by construction)
+- Browser, canvas, font, audio, or any other fingerprinting
+- Raw IP addresses as an identifier
+
+**Qualified since 2026-08-22:** the system previously collected *no* identifier
+that survived a tab close. It now stores one random per-classroom UUID in
+`localStorage` to enforce the per-student ClaimCheck limit. It is pseudonymous
+rather than anonymous, and it is described plainly rather than counted as
+"nothing".
 - Raw IP addresses (only a keyed hash, only on failed code attempts)
 
 ---
