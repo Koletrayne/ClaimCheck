@@ -581,7 +581,9 @@ function analysisRequest(path) {
 
 // Refused because a usage budget is exhausted, rather than because something
 // went wrong. Each maps to its own translated message.
-const USAGE_LIMIT_CODES = new Set(['STUDENT_LIMIT', 'CLASSROOM_LIMIT', 'GLOBAL_LIMIT', 'USAGE_UNVERIFIED']);
+const USAGE_LIMIT_CODES = new Set([
+  'STUDENT_LIMIT', 'CLASSROOM_LIMIT', 'TOKEN_SAFETY_LIMIT', 'GLOBAL_LIMIT', 'USAGE_UNVERIFIED',
+]);
 
 /**
  * Turns a limit refusal into the message the user should read.
@@ -598,7 +600,14 @@ function usageLimitMessage(data) {
       const limit = (data._usage && data._usage.student && data._usage.student.limit) || 0;
       return limit > 0 ? t('errors.studentLimit', { limit }) : t('errors.studentLimitGeneric');
     }
-    case 'CLASSROOM_LIMIT':   return t('errors.classroomLimit');
+    case 'CLASSROOM_LIMIT': {
+      const limit = (data._usage && data._usage.classroom && data._usage.classroom.limit) || 0;
+      return limit > 0 ? t('errors.classroomLimit', { limit }) : t('errors.classroomLimitGeneric');
+    }
+    // Deliberately not the same message as CLASSROOM_LIMIT. The class did NOT
+    // run out of ClaimChecks; something consumed far more than it should have,
+    // and telling a student otherwise sends their teacher to the wrong number.
+    case 'TOKEN_SAFETY_LIMIT': return t('errors.tokenSafetyLimit');
     case 'GLOBAL_LIMIT':      return t('errors.globalLimit');
     case 'USAGE_UNVERIFIED':  return t('errors.usageUnverified');
     default:                return (data && data.error) || t('errors.generic');

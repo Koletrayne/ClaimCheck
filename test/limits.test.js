@@ -69,8 +69,8 @@ test('the documented defaults are the values actually in force', () => {
     CLAIMCHECK_GLOBAL_MONTHLY_LIMIT: undefined,
   }, () => {
     assert.equal(limits.maxClaimCharacters(), 750);
-    assert.equal(limits.studentSessionLimit(), 12);
-    assert.equal(limits.classroomSessionLimit(), 300);
+    assert.equal(limits.studentSessionLimit(), 4);
+    assert.equal(limits.classroomSessionLimit(), 100);
     assert.equal(limits.globalDailyLimit(), 1000);
     assert.equal(limits.globalMonthlyLimit(), 15000);
   });
@@ -95,8 +95,8 @@ test('every limit is overridable from the environment', () => {
 test('a malformed environment value falls back to the default rather than becoming NaN', () => {
   // A NaN limit compares false against everything, which would silently switch
   // the guardrail off — the one failure mode this feature cannot have.
-  withEnv({ CLAIMCHECK_STUDENT_SESSION_LIMIT: 'twelve' }, () => {
-    assert.equal(limits.studentSessionLimit(), 12);
+  withEnv({ CLAIMCHECK_STUDENT_SESSION_LIMIT: 'four' }, () => {
+    assert.equal(limits.studentSessionLimit(), 4);
   });
   withEnv({ CLAIMCHECK_GLOBAL_DAILY_LIMIT: '-5' }, () => {
     assert.equal(limits.globalDailyLimit(), 1000);
@@ -179,12 +179,32 @@ test('the headroom percentage is configurable', () => {
   });
 });
 
-test('an unmetered per-student limit falls back to the flat classroom default', () => {
-  // 0 students-limit means "no per-student gate". Multiplying by it would yield
-  // 0, which the database reads as "no classroom limit either" — a quota that
-  // silently disappears. The flat default is the safer reading.
-  withEnv({ CLAIMCHECK_STUDENT_SESSION_LIMIT: 0, CLAIMCHECK_CLASSROOM_SESSION_LIMIT: 300 }, () => {
-    assert.equal(limits.defaultClassroomClaimLimit({ expected_students: 25 }), 300);
+test('a per-student limit of 0 cannot be set from the environment', () => {
+  // 0 used to mean "no per-student gate", and multiplying by it produced 0 —
+  // which every gate reads as "no classroom limit either". There is no longer
+  // any way to reach that state: the value is out of the accepted 1–20 range,
+  // so it warns and falls back to the built-in default like any other bad input.
+  withEnv({ CLAIMCHECK_STUDENT_SESSION_LIMIT: 0 }, () => {
+    assert.equal(limits.studentSessionLimit(), 4);
+    assert.equal(limits.defaultClassroomClaimLimit({ expected_students: 25 }), 100);
+  });
+});
+
+test('an out-of-range per-student limit from the environment falls back', () => {
+  for (const bad of [0, 21, 1000, -3, 'lots']) {
+    withEnv({ CLAIMCHECK_STUDENT_SESSION_LIMIT: bad }, () => {
+      assert.equal(limits.studentSessionLimit(), 4, `${bad} must not be accepted`);
+    });
+  }
+  // In range, and still honoured.
+  withEnv({ CLAIMCHECK_STUDENT_SESSION_LIMIT: 20 }, () => {
+    assert.equal(limits.studentSessionLimit(), 20);
+  });
+});
+
+test('the classroom-wide limit can never be configured to 0 either', () => {
+  withEnv({ CLAIMCHECK_CLASSROOM_SESSION_LIMIT: 0 }, () => {
+    assert.equal(limits.classroomSessionLimit(), 100);
   });
 });
 
@@ -194,6 +214,26 @@ test('a classroom without an expected roster falls back to the flat default', ()
     assert.equal(limits.defaultClassroomClaimLimit({}), 300);
     // Zero students is not a roster size; it must not produce a zero budget.
     assert.equal(limits.defaultClassroomClaimLimit({ expected_students: 0 }), 300);
+  });
+});
+
+test('the flat default and the derived default agree out of the box', () => {
+  // 25 × 4 = 100. If these two ever disagree, a teacher who leaves the form
+  // blank is shown one capacity and given another — the exact class of bug this
+  // work exists to remove.
+  withEnv({
+    CLAIMCHECK_STUDENT_SESSION_LIMIT: undefined,
+    CLAIMCHECK_CLASSROOM_SESSION_LIMIT: undefined,
+    CLAIMCHECK_DEFAULT_EXPECTED_STUDENTS: undefined,
+    CLAIMCHECK_CLASSROOM_HEADROOM_PERCENT: undefined,
+  }, () => {
+    assert.equal(limits.classroomSessionLimit(), 100);
+    assert.equal(limits.defaultClassroomClaimLimit({}), 100);
+    assert.equal(limits.classroomCapacity({}), 100);
+    assert.equal(
+      limits.defaultExpectedStudents() * limits.studentSessionLimit(),
+      limits.classroomSessionLimit()
+    );
   });
 });
 

@@ -102,37 +102,73 @@
               </select>
               <span class="cc-field__help">The code stops working when this runs out.</span>
             </div>
-            <div class="cc-field">
-              <label class="cc-field__label" for="create-budget">Usage allowance</label>
-              <select id="create-budget">
-                <option value="50000">50,000 tokens (~15 analyses)</option>
-                <option value="100000" selected>100,000 tokens (~30 analyses)</option>
-                <option value="250000">250,000 tokens (~75 analyses)</option>
-                <option value="500000">500,000 tokens (~150 analyses)</option>
-                <option value="1000000">1,000,000 tokens (~300 analyses)</option>
-              </select>
-              <span class="cc-field__help">Shared by the whole class. Estimates are approximate.</span>
-            </div>
           </div>
+
           <!--
-            Optional claim quotas. Both are blank by default, which means "use
-            the server's configured limits" rather than a number frozen at
-            creation time — so raising the site-wide default lifts every
-            classroom that never set its own.
+            The allowance, in the only units a teacher should have to think in.
+            One ClaimCheck is one completed analysis a student receives back.
+
+            Class size and ClaimChecks per student are the primary control: they
+            multiply into the classroom's capacity, and the running total below
+            shows exactly what that comes to. Both are blank by default, which
+            means "use the server's configured value" rather than a number
+            frozen at creation time — so raising the site-wide default lifts
+            every classroom that never set its own.
           -->
           <div class="cc-field-row">
             <div class="cc-field">
-              <label class="cc-field__label" for="create-per-student">ClaimChecks per student (optional)</label>
-              <input id="create-per-student" type="number" min="0" max="1000" step="1" placeholder="Default" />
-              <span class="cc-field__help">How many claims one student may check. Leave blank for the default.</span>
+              <label class="cc-field__label" for="create-expected">Expected class size</label>
+              <!-- min/max/placeholder are replaced from the server's own limits
+                   on load; these are the fallback for a page that renders first. -->
+              <input id="create-expected" type="number" min="1" max="1000" step="1" placeholder="25" />
+              <span class="cc-field__help">A count only &mdash; ClaimCheck never asks who your students are.</span>
             </div>
             <div class="cc-field">
-              <label class="cc-field__label" for="create-expected">Expected class size (optional)</label>
-              <input id="create-expected" type="number" min="0" max="1000" step="1" placeholder="Default" />
-              <span class="cc-field__help">Used to size the whole-class claim limit. A count only &mdash; no student details.</span>
+              <label class="cc-field__label" for="create-per-student">ClaimChecks per student</label>
+              <input id="create-per-student" type="number" min="1" max="20" step="1" placeholder="4" />
+              <span class="cc-field__help">1 to 20. How many claims each student can check during the lesson.</span>
+            </div>
+            <div class="cc-field">
+              <label class="cc-field__label" for="create-capacity">Classroom capacity</label>
+              <select id="create-capacity">
+                <option value="" selected>Automatic (class size &times; per student)</option>
+                <option value="15">15 ClaimChecks</option>
+                <option value="30">30 ClaimChecks</option>
+                <option value="75">75 ClaimChecks</option>
+                <option value="150">150 ClaimChecks</option>
+                <option value="300">300 ClaimChecks</option>
+              </select>
+              <span class="cc-field__help">Shared by the whole class. Choose a fixed total to override the calculation.</span>
             </div>
           </div>
+
+          <!--
+            The live readout of the arithmetic above. This is the promise the
+            teacher is making to their class, so it says the number plainly and
+            the server computes it the same way.
+          -->
+          <p id="create-capacity-summary" class="cc-capacity" aria-live="polite"></p>
+
           <button id="create-btn" class="btn-primary" type="submit">Create classroom</button>
+
+          <!--
+            Tokens are an internal cost guardrail, not an allowance. They live
+            behind a disclosure so an administrator can reach them and a teacher
+            never has to interpret them.
+          -->
+          <details class="cc-advanced">
+            <summary>Advanced &mdash; internal cost limits</summary>
+            <div class="cc-field">
+              <label class="cc-field__label" for="create-token-ceiling">Token safety limit</label>
+              <input id="create-token-ceiling" type="number" min="60000" max="50000000" step="1000" placeholder="Automatic" />
+              <span class="cc-field__help">
+                A ceiling on API tokens, sized automatically from the classroom capacity
+                (about 90,000 per ClaimCheck &mdash; roughly three times what one actually costs).
+                It exists to stop runaway consumption, not to limit normal lessons.
+                Leave blank unless you have a reason. It cannot be removed.
+              </span>
+            </div>
+          </details>
         </form>
         <div id="create-error" class="cc-error" hidden role="alert"></div>
       </section>

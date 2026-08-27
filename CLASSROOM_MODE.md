@@ -120,7 +120,7 @@ Access code: 8 chars from a 31-symbol alphabet  →  ~39.6 bits of entropy
 Student enters the code at /classroom/join, or opens /classroom/<CODE>
         │
         ▼
-Server validates: code exists, classroom active, not expired, budget remaining
+Server validates: code exists, classroom active, not expired, ClaimChecks remaining
         │
         ▼
 Server mints an HMAC-SHA256 session token:
@@ -173,7 +173,10 @@ content or a student identifier.
 | `session_secret` (text) | Per-classroom HMAC key; never leaves the server |
 | `created_at`, `expires_at` | Lifetime |
 | `active` (bool) | Manual close |
-| `token_budget`, `tokens_used` | Usage allowance and consumption |
+| `claims_used`, `claim_limit` | **The classroom allowance, in completed ClaimChecks** |
+| `claim_limit_per_student`, `expected_students` | Per-student cap and roster size (a count, never a list) |
+| `token_safety_limit`, `tokens_used` | Internal cost ceiling and consumption |
+| `token_budget` | Legacy. Retained for historical rows; nothing gates on it |
 | `analyses_run`, `searches_used` | Aggregate counters |
 
 `access_code` is stored in plain text. It is a short-lived, low-sensitivity
@@ -316,7 +319,7 @@ rather than anonymous, and it is described plainly rather than counted as
 | Student submits a claim | No — held in memory for the request |
 | Backend calls the AI provider | No |
 | Result returned to student | No — rendered in the browser only |
-| Analysis complete | Only aggregate counters increment: `tokens_used`, `analyses_run`, `searches_used` |
+| Analysis complete | Only aggregate counters increment: `claims_used`, `tokens_used`, `analyses_run`, `searches_used` |
 
 Concretely, in Classroom Mode:
 
@@ -326,8 +329,8 @@ Concretely, in Classroom Mode:
 - **Nothing is written to `localStorage`.** Verified in the browser: after a
   full classroom session, `localStorage` is empty.
 - **`sessionStorage` holds only the session token and the classroom's own
-  display fields** (`displayName`, `expiresAt`, `budgetRemaining`,
-  `budgetTotal`) — all properties of the classroom, not the student.
+  display fields** (`displayName`, `expiresAt`, `claimsRemaining`,
+  `claimsTotal`) — all properties of the classroom, not the student.
 - **Share links are disabled.** A ClaimCheck share URL encodes the entire claim
   and result into the address. That is exactly the sort of student work that
   should not outlive the session or travel outside the classroom, so the button
@@ -379,7 +382,7 @@ Anthropic Messages API      ← API key lives only in server env
    ▼
 ClaimCheck backend
    │  accumulate token usage across every turn
-   │  debit the classroom budget (atomic)
+   │  debit one ClaimCheck and the tokens spent (atomic)
    ▼
 Student browser  ← result + remaining class allowance
 ```
@@ -404,9 +407,9 @@ codes, or session tokens.**
 What is logged:
 
 ```
-[classroom] created <uuid> budget=100000
+[classroom] created <uuid> claimChecks=100 tokenCeiling=9000000 perStudent=4
 [classroom] join ok <uuid>
-[classroom] analysis <uuid> tokens=12480 searches=3
+[classroom] analysis <uuid> claimChecks=2/15 tokens=29038 searches=2 classTokens=55594/1350000
 [classroom] updated <uuid> fields=active,session_secret
 [classroom] analyze failed for <uuid>: <error message>
 ```
@@ -440,6 +443,15 @@ per-student measurement and no identifier that would make one possible.
 ---
 
 ## 11. Token accounting
+
+> **Superseded in part — see `CLASSROOM_ALLOWANCE.md` (2026-08-27).** A classroom
+> is no longer *allocated* in tokens. Its allowance is a count of completed
+> ClaimChecks, and tokens are an internal safety ceiling behind it. How usage is
+> measured, described below, is unchanged and still accurate — except for one
+> correction: in practice a full analysis is a **single** API call, because the
+> web_search tool resolves server-side inside it and every page it reads is
+> billed as input on that one request. That is why one ClaimCheck costs about
+> 29,000 tokens rather than the ~3,300 the original budget options assumed.
 
 ClaimCheck had **no** token tracking before this work — `lib/analyze.js`
 discarded the Anthropic `usage` object entirely. Classroom budgets required

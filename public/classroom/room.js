@@ -52,7 +52,10 @@
     return;
   }
 
-  let budgetTotal = Number(session.classroom && session.classroom.budgetTotal) || 0;
+  // The whole-class allowance, in ClaimChecks. Held here so a later poll that
+  // omits the total (or a classroom with no cap at all) does not blank the
+  // meter the student is already looking at.
+  let claimsTotal = Number(session.classroom && session.classroom.claimsTotal) || 0;
 
   /* ── Anonymous student id ───────────────────────── */
 
@@ -74,21 +77,28 @@
       expiresEl.textContent = when.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
       expiresEl.title = when.toLocaleString();
     }
-    if (room.budgetTotal) budgetTotal = Number(room.budgetTotal);
-    renderMeter(Number(room.budgetRemaining));
+    if (room.claimsTotal) claimsTotal = Number(room.claimsTotal);
+    renderMeter(Number(room.claimsRemaining));
   }
 
   /**
-   * Shows how much of the CLASS allowance is left. This is a shared, whole-class
-   * figure — it is not, and cannot be, attributed to any individual student.
+   * Shows how much of the CLASS allowance is left, counted in ClaimChecks.
+   *
+   * This is a shared, whole-class figure — it is not, and cannot be, attributed
+   * to any individual student. It used to be a token percentage, which was a
+   * number no student could act on and which drained roughly eight times faster
+   * than the analysis count it was supposed to represent.
    */
   function renderMeter(remaining) {
-    if (!budgetTotal || !Number.isFinite(remaining)) return;
-    const pct = Math.max(0, Math.min(100, (remaining / budgetTotal) * 100));
+    // No total means the class is unmetered, so there is nothing to be a
+    // fraction of. Leave the meter as it is rather than drawing an empty bar.
+    if (!claimsTotal || !Number.isFinite(remaining)) return;
+    const pct = Math.max(0, Math.min(100, (remaining / claimsTotal) * 100));
     meterFill.style.width = `${pct}%`;
     meterEl.classList.toggle('cc-meter--low', pct <= 20 && pct > 0);
     meterEl.classList.toggle('cc-meter--empty', pct <= 0);
-    meterEl.setAttribute('aria-label', `Class allowance: ${Math.round(pct)}% remaining`);
+    meterEl.setAttribute('aria-label',
+      `Class allowance: ${remaining} of ${claimsTotal} ClaimChecks remaining`);
   }
 
   /**
@@ -164,7 +174,8 @@
     /** Called after each analysis with the server's classroom metadata. */
     onResult(meta) {
       if (!meta) return;
-      renderMeter(Number(meta.budgetRemaining));
+      if (meta.claimsTotal) claimsTotal = Number(meta.claimsTotal);
+      renderMeter(Number(meta.claimsRemaining));
       renderClaims(meta.claims);
       showPiiWarning(meta.piiWarning);
     },

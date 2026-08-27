@@ -313,6 +313,58 @@
 }
 .cc-stat__value { font-size: 1.05rem; font-weight: 600; font-variant-numeric: tabular-nums; }
 
+/* Internal cost accounting, deliberately quieter than the ClaimCheck stats
+   above it. A teacher should be able to ignore this line entirely until the
+   safety ceiling actually fires, at which point it becomes the only line that
+   explains what happened. */
+.cc-internal {
+  font-size: 0.8rem;
+  color: var(--muted);
+  margin-bottom: 14px;
+  font-variant-numeric: tabular-nums;
+}
+.cc-internal__label {
+  text-transform: uppercase;
+  font-size: 0.7rem;
+  letter-spacing: 0.04em;
+}
+.cc-internal--alert {
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--danger, #c0392b);
+  border-radius: 8px;
+  padding: 10px 12px;
+  line-height: 1.45;
+}
+
+/* The live "25 students × 4 ClaimChecks = 100" readout on the create form. It
+   is a promise the teacher is about to make, so it reads as a statement rather
+   than as another hint. */
+.cc-capacity {
+  margin: 4px 0 16px;
+  padding: 10px 12px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 0.88rem;
+  font-weight: 500;
+  color: var(--text);
+}
+.cc-capacity:empty { display: none; }
+
+/* Token controls live behind a disclosure: reachable by an administrator,
+   invisible to a teacher who has no reason to interpret them. */
+.cc-advanced { margin-top: 16px; }
+.cc-advanced > summary {
+  cursor: pointer;
+  font-size: 0.82rem;
+  color: var(--muted);
+  padding: 4px 0;
+}
+.cc-advanced > summary:hover { color: var(--primary); }
+.cc-advanced[open] > summary { margin-bottom: 10px; }
+
 .cc-room__actions { display: flex; flex-wrap: wrap; gap: 8px; }
 
 .cc-btn {

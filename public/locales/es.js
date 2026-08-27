@@ -156,7 +156,12 @@
       claimTooLong: 'Las afirmaciones pueden tener hasta {max} caracteres. Intenta reducirlo a la afirmación específica que quieres verificar.',
       studentLimit: 'Has alcanzado el límite de {limit} afirmaciones para esta sesión de clase. Pregunta a tu docente si necesitas más ClaimChecks.',
       studentLimitGeneric: 'Has usado todos tus ClaimChecks para esta sesión de clase. Pregunta a tu docente si necesitas más.',
-      classroomLimit: 'Esta clase alcanzó su límite de uso de ClaimCheck. Pide ayuda a tu docente.',
+      classroomLimit: 'Esta clase ya usó sus {limit} ClaimChecks. Pide ayuda a tu docente.',
+      classroomLimitGeneric: 'Esta clase ya usó todos sus ClaimChecks. Pide ayuda a tu docente.',
+      // A propósito distinto de classroomLimit: la clase NO se quedó sin
+      // ClaimChecks. La detuvo un límite interno de consumo de recursos, algo
+      // que solo puede resolver el docente o quien administra la cuenta.
+      tokenSafetyLimit: 'ClaimCheck pausó esta clase porque está consumiendo muchos más recursos de lo previsto. No es que se hayan agotado tus ClaimChecks: avísale a tu docente, que puede revisar el panel de la clase.',
       globalLimit: 'ClaimCheck no está disponible temporalmente porque se alcanzó el límite de uso. Inténtalo más tarde o comunícate con tu docente.',
       usageUnverified: 'ClaimCheck no puede verificar los límites de uso en este momento. Inténtalo de nuevo en unos minutos.',
     },

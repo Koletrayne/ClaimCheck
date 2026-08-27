@@ -1,5 +1,19 @@
 # ClaimCheck Usage Guardrails
 
+> **Updated 2026-08-27 — see `CLASSROOM_ALLOWANCE.md`.** The per-student and
+> per-classroom claim counters described here are unchanged, and are now the
+> PRIMARY classroom allowance, surfaced to teachers as "ClaimChecks" rather than
+> sitting behind a token budget. Three behaviours below have changed:
+>
+> * A classroom budget is derived from the classroom's OWN
+>   `claim_limit_per_student`, not the server-wide default. Headroom now defaults
+>   to 100%, so `class size × per student` is exact.
+> * A failed analysis ALWAYS returns its reservation, including one that reached
+>   a paid provider. Its tokens are charged to the new token safety ceiling
+>   instead, so cost is still tracked without spending a student's ClaimCheck.
+> * `claimcheck_reserve_claim` gained a fifth gate, the token safety ceiling,
+>   evaluated last and reported as `TOKEN_SAFETY_LIMIT`.
+
 Added 2026-08-22. Four layers that stand between a student pressing "Check
 Claim" and a paid provider request, so no single student, classroom, or runaway
 script can spend an unbounded amount of API credit.

@@ -51,6 +51,11 @@ function loadPage({
   storage = makeStorage(),
   classroom = null,
   fetchImpl = async () => { throw new Error('network disabled in this test'); },
+  // Merged into the sandbox BEFORE any script runs. Some pages boot on load
+  // rather than on DOMContentLoaded — the classroom dashboard reads
+  // window.cc.supabase in the same tick it is defined in — so a global attached
+  // after the fact arrives too late to be seen.
+  globals = {},
 } = {}) {
   const dom = parseHTML(html);
   const { document } = dom;
@@ -117,6 +122,7 @@ function loadPage({
   sandbox.window = sandbox;
   sandbox.self = sandbox;
   sandbox.globalThis = sandbox;
+  Object.assign(sandbox, globals);
 
   const context = vm.createContext(sandbox);
   for (const rel of scripts) {
@@ -449,4 +455,420 @@ test('the URL tab is unaffected by the claim character limit', () => {
   } finally {
     page.cleanup();
   }
+});
+
+/* ── 20. The classroom dashboard speaks in ClaimChecks ────────────────────
+ *
+ * The teacher-facing half of the allowance change. These run the real
+ * admin.html and admin.js in the same harness, because the number this page
+ * prints — "25 students × 4 ClaimChecks = 100" — is a promise made to a class,
+ * and the only thing stopping it drifting from what the server computes is a
+ * test that reads it off the page.
+ */
+
+/**
+ * What GET /api/classroom/me publishes to the dashboard.
+ *
+ * Taken from lib/limits.js rather than written out, so a test cannot pass by
+ * agreeing with a number the server stopped using. The page renders these; the
+ * server still re-validates everything it is sent.
+ */
+const SERVER_LIMITS = require('../lib/classroom-routes')._internal.classroomFormLimits();
+
+/** A Supabase client stand-in: signed in, with a token, and nothing else. */
+function fakeSupabase(email = 'teacher@example.com') {
+  return {
+    auth: {
+      getUser: async () => ({ data: { user: { id: 'teacher-uuid', email } } }),
+      getSession: async () => ({ data: { session: { access_token: 'teacher-token' } } }),
+      signInWithPassword: async () => ({ error: null }),
+      signOut: async () => {},
+    },
+  };
+}
+
+/**
+ * Loads the dashboard with a stubbed classroom API.
+ *
+ * `rooms` are ownerView-shaped rows, exactly as lib/classroom.js emits them.
+ * Waits for boot() to finish rendering rather than guessing at a delay.
+ */
+async function loadAdmin({ rooms = [], educator = true, limits = SERVER_LIMITS, onPost } = {}) {
+  const requests = [];
+  const page = loadPage({
+    html: readPublic('classroom/admin.html'),
+    scripts: ['classroom/admin.js'],
+    fetchImpl: async (url, options = {}) => {
+      requests.push(String(url));
+      if (options.body && onPost) onPost(JSON.parse(options.body));
+      const body = String(url).endsWith('/me')
+        ? { signedIn: true, educator, limits }
+        : { classrooms: rooms };
+      return { ok: true, status: 200, json: async () => body };
+    },
+    globals: {
+      cc: { supabase: fakeSupabase(), supabaseReady: Promise.resolve() },
+      Intl,
+      confirm: () => true,
+      alert: () => {},
+      location: { origin: 'http://localhost', hash: '', pathname: '/classroom/admin.html', search: '', href: 'http://localhost/classroom/admin.html', replace() {} },
+    },
+  });
+
+  // admin.js calls boot() as it loads; give its awaits a chance to settle.
+  for (let i = 0; i < 20; i++) await new Promise((r) => setTimeout(r, 0));
+
+  return { ...page, requests };
+}
+
+/** An ownerView row with sensible defaults, overridable per test. */
+function ownerRoom(overrides = {}) {
+  return {
+    id: 'room-1', displayName: 'Period 3 Civics', accessCode: 'ABCD-2345',
+    createdAt: new Date().toISOString(),
+    expiresAt: new Date(Date.now() + 3600000).toISOString(),
+    active: true, expired: false, usable: true,
+    claimsUsed: 2, claimsRemaining: 13, claimLimit: 15,
+    claimLimitPerStudent: 4, expectedStudents: 5,
+    effectiveClaimLimit: 15, effectiveClaimLimitPerStudent: 4,
+    tokensUsed: 53856, tokenSafetyLimit: 1350000, tokensRemaining: 1296144,
+    tokensExhausted: false, analysesRun: 2, searchesUsed: 4,
+    legacyTokenBudget: 100000,
+    ...overrides,
+  };
+}
+
+/* ── The create form ──────────────────────────────────────────────────── */
+
+test('the create form asks for ClaimChecks, not tokens', async () => {
+  const page = await loadAdmin();
+
+  assert.ok(page.$('create-expected'), 'expected class size is a primary field');
+  assert.ok(page.$('create-per-student'), 'ClaimChecks per student is a primary field');
+  assert.ok(page.$('create-capacity'), 'classroom capacity is expressed as a choice of ClaimChecks');
+  assert.equal(page.$('create-budget'), null, 'the token allowance dropdown is gone');
+
+  // Every capacity option is a ClaimCheck count, not a token count.
+  for (const option of page.$('create-capacity').querySelectorAll('option')) {
+    if (!option.getAttribute('value')) continue;
+    assert.match(option.textContent, /ClaimCheck/);
+    assert.doesNotMatch(option.textContent, /token/i);
+  }
+
+  page.cleanup();
+});
+
+test('tokens appear only inside the advanced disclosure', async () => {
+  const page = await loadAdmin();
+  const form = page.$('create-form');
+
+  const advanced = form.querySelector('details');
+  assert.ok(advanced, 'the token control lives behind a disclosure');
+  assert.ok(advanced.contains(page.$('create-token-ceiling')));
+
+  // Nothing outside that disclosure may mention tokens: a teacher should be
+  // able to fill this form in without meeting the word.
+  const advancedText = advanced.textContent;
+  const outside = form.textContent.replace(advancedText, '');
+  assert.doesNotMatch(outside, /token/i);
+
+  page.cleanup();
+});
+
+test('25 students x 4 ClaimChecks reads as 100 on the form', async () => {
+  const page = await loadAdmin();
+
+  page.$('create-expected').value = '25';
+  fire(page.$('create-expected'), 'input');
+  page.$('create-per-student').value = '4';
+  fire(page.$('create-per-student'), 'input');
+
+  const summary = page.$('create-capacity-summary').textContent;
+  assert.match(summary, /25 students × 4 ClaimChecks/);
+  assert.match(summary, /classroom capacity: 100 ClaimChecks/);
+
+  page.cleanup();
+});
+
+test('5 students x 3 ClaimChecks reads as 15 on the form', async () => {
+  const page = await loadAdmin();
+
+  page.$('create-expected').value = '5';
+  fire(page.$('create-expected'), 'input');
+  page.$('create-per-student').value = '3';
+  fire(page.$('create-per-student'), 'input');
+
+  assert.match(page.$('create-capacity-summary').textContent, /classroom capacity: 15 ClaimChecks/);
+
+  page.cleanup();
+});
+
+test('blank fields show the defaults they will actually use', async () => {
+  // A form that showed nothing until both boxes were filled would hide the
+  // default rather than explain it.
+  const page = await loadAdmin();
+
+  const summary = page.$('create-capacity-summary').textContent;
+  assert.match(summary, /25 students × 4 ClaimChecks/);
+  assert.match(summary, /classroom capacity: 100 ClaimChecks/);
+  assert.match(summary, /default 25 students and 4 per student/);
+
+  page.cleanup();
+});
+
+test('the form takes its defaults from the server, not from a copy in the page', async () => {
+  // The number printed here has to be the number the server computes. It lived
+  // in two places once; one of them drifted, and a teacher was shown a capacity
+  // that did not exist.
+  const page = await loadAdmin();
+
+  assert.equal(page.$('create-per-student').placeholder, String(SERVER_LIMITS.defaultClaimsPerStudent));
+  assert.equal(page.$('create-expected').placeholder, String(SERVER_LIMITS.defaultExpectedStudents));
+  assert.equal(page.$('create-per-student').getAttribute('max'), String(SERVER_LIMITS.maxClaimsPerStudent));
+  assert.equal(page.$('create-per-student').getAttribute('min'), String(SERVER_LIMITS.minClaimsPerStudent));
+
+  const expected = SERVER_LIMITS.defaultExpectedStudents * SERVER_LIMITS.defaultClaimsPerStudent;
+  assert.match(page.$('create-capacity-summary').textContent,
+    new RegExp(`classroom capacity: ${expected} ClaimChecks`));
+
+  page.cleanup();
+});
+
+test('a server that raises the default moves the printed capacity with it', async () => {
+  const page = await loadAdmin({
+    limits: { ...SERVER_LIMITS, defaultClaimsPerStudent: 6, defaultExpectedStudents: 30 },
+  });
+
+  assert.match(page.$('create-capacity-summary').textContent, /30 students × 6 ClaimChecks/);
+  assert.match(page.$('create-capacity-summary').textContent, /capacity: 180 ClaimChecks/);
+
+  page.cleanup();
+});
+
+test('one blank field still names which default filled it in', async () => {
+  const page = await loadAdmin();
+
+  page.$('create-per-student').value = '4';
+  fire(page.$('create-per-student'), 'input');
+
+  const summary = page.$('create-capacity-summary').textContent;
+  assert.match(summary, /classroom capacity: 100 ClaimChecks/);
+  assert.match(summary, /default 25 students/);
+  assert.doesNotMatch(summary, /per student\.$/);
+
+  page.cleanup();
+});
+
+test('a fixed capacity overrides the calculation and says so', async () => {
+  const page = await loadAdmin();
+
+  page.$('create-expected').value = '25';
+  fire(page.$('create-expected'), 'input');
+  page.$('create-per-student').value = '4';
+  fire(page.$('create-per-student'), 'input');
+  page.$('create-capacity').value = '30';
+  fire(page.$('create-capacity'), 'input');
+
+  const summary = page.$('create-capacity-summary').textContent;
+  assert.match(summary, /Classroom capacity: 30 ClaimChecks/);
+  assert.match(summary, /up to 4 ClaimChecks per student/);
+
+  page.cleanup();
+});
+
+test('zero ClaimChecks per student is refused, not treated as unlimited', async () => {
+  const page = await loadAdmin();
+
+  page.$('create-per-student').value = '0';
+  fire(page.$('create-per-student'), 'input');
+
+  const summary = page.$('create-capacity-summary').textContent;
+  assert.match(summary, /must be between 1 and 20/);
+  assert.match(summary, /blank for the default of 4/);
+  // The two readings this must never offer: an unlimited class, or a class of
+  // nothing. 0 is a mistake, and the form says which one.
+  assert.doesNotMatch(summary, /no ClaimCheck cap|unlimited/i);
+  assert.doesNotMatch(summary, /capacity: 0/);
+
+  page.cleanup();
+});
+
+test('every out-of-range entry is called out instead of previewing a capacity', async () => {
+  const page = await loadAdmin();
+
+  for (const bad of ['0', '-1', '21', '100']) {
+    page.$('create-per-student').value = bad;
+    fire(page.$('create-per-student'), 'input');
+    assert.match(page.$('create-capacity-summary').textContent, /must be between 1 and 20/,
+      `${bad} ClaimChecks per student must be called out`);
+  }
+  page.$('create-per-student').value = '4';
+  fire(page.$('create-per-student'), 'input');
+
+  for (const bad of ['0', '-3', '1001']) {
+    page.$('create-expected').value = bad;
+    fire(page.$('create-expected'), 'input');
+    assert.match(page.$('create-capacity-summary').textContent, /class size must be between 1 and 1000/,
+      `class size ${bad} must be called out`);
+  }
+
+  page.cleanup();
+});
+
+test('a form with an out-of-range value never reaches the server', async () => {
+  // A courtesy, not a control — the server refuses it too — but a round trip
+  // that only ever ends in a 400 is a round trip worth not making.
+  const sent = [];
+  const page = await loadAdmin({ onPost: (body) => sent.push(body) });
+
+  page.$('create-per-student').value = '0';
+  fire(page.$('create-per-student'), 'input');
+  fire(page.$('create-form'), 'submit');
+  for (let i = 0; i < 20; i++) await new Promise((r) => setTimeout(r, 0));
+
+  assert.equal(sent.length, 0, 'nothing should have been submitted');
+  assert.match(page.$('create-error').textContent, /must be between 1 and 20/);
+  assert.equal(page.$('create-error').hidden, false);
+
+  page.cleanup();
+});
+
+test('creating a classroom sends ClaimCheck fields and no token budget', async () => {
+  const sent = [];
+  const page = loadPage({
+    html: readPublic('classroom/admin.html'),
+    scripts: ['classroom/admin.js'],
+    fetchImpl: async (url, options = {}) => {
+      if (options.body) sent.push(JSON.parse(options.body));
+      const body = String(url).endsWith('/me')
+        ? { signedIn: true, educator: true, limits: SERVER_LIMITS }
+        : { classrooms: [] };
+      return { ok: true, status: 200, json: async () => body };
+    },
+    globals: {
+      cc: { supabase: fakeSupabase(), supabaseReady: Promise.resolve() },
+      Intl,
+      location: { origin: 'http://localhost', hash: '', pathname: '/', search: '', href: 'http://localhost/', replace() {} },
+    },
+  });
+  for (let i = 0; i < 20; i++) await new Promise((r) => setTimeout(r, 0));
+
+  page.$('create-expected').value = '25';
+  page.$('create-per-student').value = '4';
+  fire(page.$('create-form'), 'submit');
+  for (let i = 0; i < 20; i++) await new Promise((r) => setTimeout(r, 0));
+
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].expectedStudents, 25);
+  assert.equal(sent[0].claimLimitPerStudent, 4);
+  assert.equal(sent[0].claimLimit, null, 'blank capacity means "derive it", not a frozen number');
+  assert.equal(sent[0].tokenSafetyLimit, null, 'blank ceiling means "size it from the capacity"');
+  assert.equal('tokenBudget' in sent[0], false, 'the token budget is no longer a classroom input');
+
+  page.cleanup();
+});
+
+/* ── The classroom card ───────────────────────────────────────────────── */
+
+test('the dashboard leads with ClaimChecks used, not an allowance percentage', async () => {
+  const page = await loadAdmin({ rooms: [ownerRoom()] });
+  const labels = [...page.document.querySelectorAll('.cc-stat__label')].map((n) => n.textContent);
+  const values = [...page.document.querySelectorAll('.cc-stat__value')].map((n) => n.textContent);
+
+  assert.equal(labels[0], 'ClaimChecks used');
+  assert.equal(values[0], '2 of 15');
+  assert.equal(values[labels.indexOf('Remaining')], '13');
+  assert.equal(values[labels.indexOf('Searches')], '4');
+
+  // The metric that misled the teacher is gone, and so is its duplicate.
+  assert.equal(labels.includes('Allowance used'), false);
+  assert.equal(labels.includes('Analyses run'), false,
+    'ClaimChecks used and analyses run are the same number and must not be shown twice');
+
+  page.cleanup();
+});
+
+test('the token total is demoted to a secondary line', async () => {
+  const page = await loadAdmin({ rooms: [ownerRoom()] });
+
+  const internal = page.document.querySelector('.cc-internal');
+  assert.ok(internal, 'the token figure is still available to whoever wants it');
+  assert.match(internal.textContent, /Internal usage/);
+  assert.match(internal.textContent, /53\.9k tokens/);
+
+  // But it is not one of the headline stats.
+  const stats = [...page.document.querySelectorAll('.cc-stat')].map((n) => n.textContent).join(' ');
+  assert.doesNotMatch(stats, /53,856|53\.9k/);
+
+  page.cleanup();
+});
+
+test('a classroom stopped by the safety ceiling says so plainly', async () => {
+  // The distinction that matters: this class did NOT run out of ClaimChecks,
+  // and the card must not let a teacher think it did.
+  const page = await loadAdmin({
+    rooms: [ownerRoom({
+      usable: false, tokensExhausted: true, tokensRemaining: 0,
+      claimsUsed: 4, claimsRemaining: 11,
+    })],
+  });
+
+  const status = page.document.querySelector('.cc-room__status');
+  assert.equal(status.textContent, 'Paused (safety limit)');
+
+  const internal = page.document.querySelector('.cc-internal--alert');
+  assert.ok(internal);
+  assert.match(internal.textContent, /Internal safety limit reached/);
+  assert.match(internal.textContent, /allowance was not the limit that stopped it/);
+
+  page.cleanup();
+});
+
+test('a classroom that simply finished its ClaimChecks is labelled differently', async () => {
+  const page = await loadAdmin({
+    rooms: [ownerRoom({ usable: false, tokensExhausted: false, claimsUsed: 15, claimsRemaining: 0 })],
+  });
+
+  assert.equal(page.document.querySelector('.cc-room__status').textContent, 'ClaimChecks used');
+  assert.equal(page.document.querySelector('.cc-internal--alert'), null);
+
+  page.cleanup();
+});
+
+test('the dashboard has no way to render an unlimited classroom', async () => {
+  // There is no such classroom to render. The card shows real numbers, and the
+  // word that used to stand in for "no limit" is gone from the page entirely.
+  const page = await loadAdmin({
+    rooms: [ownerRoom({ claimsUsed: 0, claimsRemaining: 100, effectiveClaimLimit: 100 })],
+  });
+
+  const labels = [...page.document.querySelectorAll('.cc-stat__label')].map((n) => n.textContent);
+  const values = [...page.document.querySelectorAll('.cc-stat__value')].map((n) => n.textContent);
+
+  assert.equal(values[labels.indexOf('Remaining')], '100');
+  assert.equal(values[labels.indexOf('Per student')], '4');
+  assert.doesNotMatch(page.$('rooms').textContent, /unlimited/i);
+
+  page.cleanup();
+});
+
+test('the internal usage line always names a ceiling', async () => {
+  const page = await loadAdmin({ rooms: [ownerRoom()] });
+
+  assert.match(page.document.querySelector('.cc-internal').textContent,
+    /53\.9k tokens of 1\.35M internal ceiling/);
+
+  page.cleanup();
+});
+
+test('the dashboard never renders a per-student breakdown', async () => {
+  // There is no such data to render, and this pins that the card cannot start
+  // showing one without failing here first.
+  const page = await loadAdmin({ rooms: [ownerRoom()] });
+  const text = page.$('rooms').textContent;
+
+  assert.doesNotMatch(text, /student\s*#|Student 1|per-student list|individual/i);
+  assert.match(text, /Per student/, 'only the shared cap is shown, as a single number');
+
+  page.cleanup();
 });

@@ -157,7 +157,12 @@
       claimTooLong: 'Claims can be up to {max} characters. Try narrowing this down to the specific statement you want to verify.',
       studentLimit: "You've reached the {limit}-claim limit for this classroom session. Ask your instructor if you need additional ClaimChecks.",
       studentLimitGeneric: "You've used all of your ClaimChecks for this classroom session. Ask your instructor if you need more.",
-      classroomLimit: 'This classroom has reached its ClaimCheck usage limit. Please ask your instructor for assistance.',
+      classroomLimit: 'This classroom has used all {limit} of its ClaimChecks. Please ask your instructor for assistance.',
+      classroomLimitGeneric: 'This classroom has used all of its ClaimChecks. Please ask your instructor for assistance.',
+      // Deliberately different from classroomLimit: the class did NOT run out of
+      // ClaimChecks. An internal ceiling on resource use stopped it, which is
+      // something only an instructor or administrator can act on.
+      tokenSafetyLimit: 'ClaimCheck has paused this classroom because it is using far more resources than expected. This is not your ClaimCheck allowance running out — please tell your instructor, who can check the classroom dashboard.',
       globalLimit: 'ClaimCheck is temporarily unavailable because the usage limit has been reached. Please try again later or contact your instructor.',
       usageUnverified: 'ClaimCheck is temporarily unable to verify usage limits. Please try again shortly.',
     },
