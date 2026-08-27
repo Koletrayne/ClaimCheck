@@ -493,7 +493,7 @@ function fakeSupabase(email = 'teacher@example.com') {
  * `rooms` are ownerView-shaped rows, exactly as lib/classroom.js emits them.
  * Waits for boot() to finish rendering rather than guessing at a delay.
  */
-async function loadAdmin({ rooms = [], educator = true, limits = SERVER_LIMITS, onPost } = {}) {
+async function loadAdmin({ rooms = [], educator = true, limits = SERVER_LIMITS, onPost, confirm } = {}) {
   const requests = [];
   const page = loadPage({
     html: readPublic('classroom/admin.html'),
@@ -509,7 +509,7 @@ async function loadAdmin({ rooms = [], educator = true, limits = SERVER_LIMITS, 
     globals: {
       cc: { supabase: fakeSupabase(), supabaseReady: Promise.resolve() },
       Intl,
-      confirm: () => true,
+      confirm: confirm || (() => true),
       alert: () => {},
       location: { origin: 'http://localhost', hash: '', pathname: '/classroom/admin.html', search: '', href: 'http://localhost/classroom/admin.html', replace() {} },
     },
@@ -869,6 +869,313 @@ test('the dashboard never renders a per-student breakdown', async () => {
 
   assert.doesNotMatch(text, /student\s*#|Student 1|per-student list|individual/i);
   assert.match(text, /Per student/, 'only the shared cap is shown, as a single number');
+
+  page.cleanup();
+});
+
+/* ── 21. The Edit Session panel ───────────────────────────────────────────
+ *
+ * The teacher-facing half of live classroom editing, running the real
+ * admin.html and admin.js in a DOM. What these protect is the preview: the
+ * panel exists so a teacher sees the consequence of a change before saving it,
+ * and a preview that disagreed with the server would be worse than none.
+ */
+
+const editRoom = (overrides = {}) => ownerRoom({
+  claimsUsed: 37, claimsRemaining: 63, claimLimit: null,
+  claimLimitPerStudent: 4, expectedStudents: 25,
+  effectiveClaimLimit: 100, effectiveClaimLimitPerStudent: 4,
+  allowanceMode: 'automatic', overCapacity: false,
+  ...overrides,
+});
+
+const panelOf = (page) => page.document.querySelector('.cc-edit');
+const previewText = (page) => page.document.querySelector('.cc-edit__preview').textContent;
+
+function setValue(page, selector, value) {
+  const el = page.document.querySelector(selector);
+  el.value = value;
+  fire(el, 'input');
+  return el;
+}
+
+function chooseMode(page, mode) {
+  const auto = page.document.querySelector('.cc-edit__mode-auto');
+  const custom = page.document.querySelector('.cc-edit__mode-custom');
+  auto.checked = mode === 'automatic';
+  custom.checked = mode === 'custom';
+  fire(mode === 'custom' ? custom : auto, 'change');
+}
+
+test('an active classroom offers an Edit session control', async () => {
+  const page = await loadAdmin({ rooms: [editRoom()] });
+
+  const toggle = page.document.querySelector('.cc-edit-toggle');
+  assert.ok(toggle, 'the control is on the card');
+  assert.equal(toggle.textContent, 'Edit session');
+  assert.equal(toggle.getAttribute('aria-expanded'), 'false');
+  assert.equal(panelOf(page).hidden, true, 'and starts closed');
+
+  page.cleanup();
+});
+
+test('an expired classroom offers no edit control', async () => {
+  // The server refuses the edit, and a button that always fails is worse than
+  // no button.
+  const page = await loadAdmin({
+    rooms: [editRoom({ expired: true, usable: false, active: true })],
+  });
+
+  assert.equal(page.document.querySelector('.cc-edit-toggle'), null);
+  assert.equal(panelOf(page), null);
+
+  page.cleanup();
+});
+
+test('a closed classroom offers no edit control either', async () => {
+  const page = await loadAdmin({ rooms: [editRoom({ active: false, usable: false })] });
+  assert.equal(page.document.querySelector('.cc-edit-toggle'), null);
+  page.cleanup();
+});
+
+test('the panel opens showing the classroom current values', async () => {
+  const page = await loadAdmin({ rooms: [editRoom()] });
+  const toggle = page.document.querySelector('.cc-edit-toggle');
+
+  toggle.dispatchEvent(new page.context.window.Event('click', { bubbles: true }));
+
+  assert.equal(panelOf(page).hidden, false);
+  assert.equal(toggle.getAttribute('aria-expanded'), 'true');
+  assert.equal(page.document.querySelector('.cc-edit__expected').value, '25');
+  assert.equal(page.document.querySelector('.cc-edit__per-student').value, '4');
+  assert.equal(page.document.querySelector('.cc-edit__mode-auto').checked, true);
+  assert.ok(page.document.querySelector('.cc-edit__closes-at').value, 'the closing time is populated');
+
+  page.cleanup();
+});
+
+test('a custom classroom opens in custom mode with its total filled in', async () => {
+  const page = await loadAdmin({
+    rooms: [editRoom({ allowanceMode: 'custom', claimLimit: 3, effectiveClaimLimit: 3, claimsUsed: 1, claimsRemaining: 2 })],
+  });
+
+  assert.equal(page.document.querySelector('.cc-edit__mode-custom').checked, true);
+  assert.equal(page.document.querySelector('.cc-edit__custom-total').value, '3');
+
+  page.cleanup();
+});
+
+test('the preview shows the new capacity against usage already spent', async () => {
+  const page = await loadAdmin({ rooms: [editRoom()] });
+
+  setValue(page, '.cc-edit__expected', '30');
+
+  assert.match(previewText(page), /New capacity: 120 ClaimChecks/);
+  assert.match(previewText(page), /37 already used, 83 remaining/);
+
+  page.cleanup();
+});
+
+test('changing ClaimChecks per student moves the preview too', async () => {
+  const page = await loadAdmin({ rooms: [editRoom()] });
+
+  setValue(page, '.cc-edit__per-student', '5');
+
+  assert.match(previewText(page), /New capacity: 125 ClaimChecks/);
+  assert.match(previewText(page), /37 already used, 88 remaining/);
+
+  page.cleanup();
+});
+
+test('a reduction below current usage is warned about, not hidden', async () => {
+  const page = await loadAdmin({ rooms: [editRoom()] });
+
+  chooseMode(page, 'custom');
+  setValue(page, '.cc-edit__custom-total', '30');
+
+  const preview = page.document.querySelector('.cc-edit__preview');
+  assert.match(preview.textContent, /New capacity: 30 ClaimChecks/);
+  assert.match(preview.textContent, /stop accepting new ClaimChecks immediately/);
+  assert.match(preview.textContent, /Work already done is kept/);
+  assert.ok(preview.className.includes('cc-edit__preview--warn'));
+
+  page.cleanup();
+});
+
+test('the custom input is capped at 150 and refuses more', async () => {
+  const page = await loadAdmin({ rooms: [editRoom()] });
+  chooseMode(page, 'custom');
+
+  const input = page.document.querySelector('.cc-edit__custom-total');
+  assert.equal(input.getAttribute('max'), '150');
+  assert.equal(input.getAttribute('min'), '1');
+
+  setValue(page, '.cc-edit__custom-total', '150');
+  assert.match(previewText(page), /New capacity: 150 ClaimChecks/);
+
+  for (const bad of ['151', '200', '0', '-1']) {
+    setValue(page, '.cc-edit__custom-total', bad);
+    assert.match(previewText(page), /between 1 and 150/, `${bad} must be called out`);
+  }
+
+  page.cleanup();
+});
+
+test('the custom total is disabled while automatic mode is selected', async () => {
+  const page = await loadAdmin({ rooms: [editRoom()] });
+
+  assert.equal(page.document.querySelector('.cc-edit__custom-total').disabled, true);
+  chooseMode(page, 'custom');
+  assert.equal(page.document.querySelector('.cc-edit__custom-total').disabled, false);
+
+  page.cleanup();
+});
+
+test('saving sends the allowance mode and the edited fields', async () => {
+  const sent = [];
+  const page = await loadAdmin({ rooms: [editRoom()], onPost: (b) => sent.push(b) });
+
+  setValue(page, '.cc-edit__expected', '30');
+  setValue(page, '.cc-edit__per-student', '5');
+  fire(panelOf(page), 'submit');
+  for (let i = 0; i < 20; i++) await new Promise((r) => setTimeout(r, 0));
+
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].expectedStudents, 30);
+  assert.equal(sent[0].claimLimitPerStudent, 5);
+  assert.equal(sent[0].allowanceMode, 'automatic');
+  assert.ok(sent[0].expiresAt, 'the closing time is always sent, so it cannot drift');
+  assert.equal(panelOf(page).hidden, true, 'and the panel closes on success');
+
+  page.cleanup();
+});
+
+test('saving a custom allowance sends the mode and the total', async () => {
+  const sent = [];
+  const page = await loadAdmin({ rooms: [editRoom()], onPost: (b) => sent.push(b) });
+
+  chooseMode(page, 'custom');
+  setValue(page, '.cc-edit__custom-total', '3');
+  fire(panelOf(page), 'submit');
+  for (let i = 0; i < 20; i++) await new Promise((r) => setTimeout(r, 0));
+
+  assert.equal(sent[0].allowanceMode, 'custom');
+  assert.equal(sent[0].customClaimLimit, 3);
+
+  page.cleanup();
+});
+
+test('a reduction below usage asks for confirmation before saving', async () => {
+  const sent = [];
+  const asked = [];
+  const page = await loadAdmin({
+    rooms: [editRoom()],
+    onPost: (b) => sent.push(b),
+    confirm: (msg) => { asked.push(msg); return false; },
+  });
+
+  chooseMode(page, 'custom');
+  setValue(page, '.cc-edit__custom-total', '30');
+  fire(panelOf(page), 'submit');
+  for (let i = 0; i < 20; i++) await new Promise((r) => setTimeout(r, 0));
+
+  assert.equal(asked.length, 1, 'the teacher is asked');
+  assert.match(asked[0], /37 ClaimChecks have already been used/);
+  assert.match(asked[0], /immediately stop new analyses/);
+  assert.equal(sent.length, 0, 'and declining sends nothing');
+
+  page.cleanup();
+});
+
+test('confirming a reduction goes through', async () => {
+  const sent = [];
+  const page = await loadAdmin({
+    rooms: [editRoom()], onPost: (b) => sent.push(b), confirm: () => true,
+  });
+
+  chooseMode(page, 'custom');
+  setValue(page, '.cc-edit__custom-total', '30');
+  fire(panelOf(page), 'submit');
+  for (let i = 0; i < 20; i++) await new Promise((r) => setTimeout(r, 0));
+
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].customClaimLimit, 30);
+
+  page.cleanup();
+});
+
+test('an increase saves without an interruption', async () => {
+  const asked = [];
+  const page = await loadAdmin({
+    rooms: [editRoom()], onPost: () => {}, confirm: (m) => { asked.push(m); return true; },
+  });
+
+  setValue(page, '.cc-edit__expected', '30');
+  fire(panelOf(page), 'submit');
+  for (let i = 0; i < 20; i++) await new Promise((r) => setTimeout(r, 0));
+
+  assert.equal(asked.length, 0, 'only a reduction is worth stopping for');
+
+  page.cleanup();
+});
+
+test('the extend buttons move the closing time forward', async () => {
+  const page = await loadAdmin({ rooms: [editRoom()] });
+
+  const closesAt = page.document.querySelector('.cc-edit__closes-at');
+  const before = new Date(closesAt.value).getTime();
+
+  const plusHour = [...page.document.querySelectorAll('.cc-edit__extend .cc-btn')]
+    .find((b) => b.textContent === '+1 hour');
+  plusHour.dispatchEvent(new page.context.window.Event('click', { bubbles: true }));
+
+  assert.equal(new Date(closesAt.value).getTime(), before + 60 * 60 * 1000);
+
+  page.cleanup();
+});
+
+test('a classroom over its allowance says so on the card', async () => {
+  const page = await loadAdmin({
+    rooms: [editRoom({
+      overCapacity: true, claimsUsed: 37, claimsRemaining: 0,
+      effectiveClaimLimit: 30, allowanceMode: 'custom', claimLimit: 30, usable: false,
+    })],
+  });
+
+  const notice = page.document.querySelector('.cc-internal--alert');
+  assert.ok(notice, 'the card explains it rather than leaving "37 of 30" to be decoded');
+  assert.match(notice.textContent, /Allowance is below usage/);
+  assert.match(notice.textContent, /No further ClaimChecks can be started/);
+  assert.match(notice.textContent, /Work already done is unaffected/);
+
+  page.cleanup();
+});
+
+test('the dashboard shows which allowance mode a classroom is on', async () => {
+  const auto = await loadAdmin({ rooms: [editRoom()] });
+  const autoLabels = [...auto.document.querySelectorAll('.cc-stat__label')].map((n) => n.textContent);
+  const autoValues = [...auto.document.querySelectorAll('.cc-stat__value')].map((n) => n.textContent);
+  assert.equal(autoValues[autoLabels.indexOf('Allowance')], '25 × 4');
+  auto.cleanup();
+
+  const custom = await loadAdmin({
+    rooms: [editRoom({ allowanceMode: 'custom', claimLimit: 3, effectiveClaimLimit: 3 })],
+  });
+  const labels = [...custom.document.querySelectorAll('.cc-stat__label')].map((n) => n.textContent);
+  const values = [...custom.document.querySelectorAll('.cc-stat__value')].map((n) => n.textContent);
+  assert.equal(values[labels.indexOf('Allowance')], 'Custom total');
+  custom.cleanup();
+});
+
+test('the create form no longer offers a fixed total above 150', async () => {
+  const page = await loadAdmin();
+
+  const totals = [...page.$('create-capacity').options]
+    .map((o) => Number(o.getAttribute('value')))
+    .filter((n) => n > 0);
+
+  assert.ok(totals.length > 0);
+  assert.ok(Math.max(...totals) <= 150, `fixed totals were ${totals.join(', ')}`);
 
   page.cleanup();
 });

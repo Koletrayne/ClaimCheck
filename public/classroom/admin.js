@@ -177,6 +177,10 @@
         `${numberFmt.format(room.claimsUsed)} of ${numberFmt.format(room.effectiveClaimLimit)}`],
       ['Remaining', numberFmt.format(room.claimsRemaining)],
       ['Per student', numberFmt.format(room.effectiveClaimLimitPerStudent)],
+      ['Allowance', room.allowanceMode === 'custom'
+        ? 'Custom total'
+        : `${numberFmt.format(room.expectedStudents || formLimits.defaultExpectedStudents)} × ` +
+          `${numberFmt.format(room.effectiveClaimLimitPerStudent)}`],
       ['Searches', numberFmt.format(room.searchesUsed)],
     ]) {
       const stat = el('div', 'cc-stat');
@@ -186,10 +190,42 @@
     }
     card.appendChild(stats);
 
+    // A classroom whose allowance was lowered below what it had already used.
+    // "37 of 30 used" is arithmetic a teacher should not have to interpret, and
+    // it means something quite specific: nothing was lost, nothing more can
+    // start.
+    if (room.overCapacity) {
+      const notice = el('div', 'cc-internal cc-internal--alert');
+      notice.appendChild(el('strong', '', 'Allowance is below usage. '));
+      notice.appendChild(document.createTextNode(
+        `This classroom has already completed ${numberFmt.format(room.claimsUsed)} ClaimChecks, ` +
+        `more than its current allowance of ${numberFmt.format(room.effectiveClaimLimit)}. ` +
+        'No further ClaimChecks can be started. Work already done is unaffected — ' +
+        'raise the allowance to let the class continue.'
+      ));
+      card.appendChild(notice);
+    }
+
     card.appendChild(internalUsageNote(room));
 
     // Actions
     const actions = el('div', 'cc-room__actions');
+
+    // Editable while the classroom is still open. An expired one is not: the
+    // server refuses it, and offering a control that always fails is worse than
+    // not offering it. Appended below the actions once they are all built.
+    let panel = null;
+    if (!room.expired && room.active) {
+      panel = editPanel(room, refresh);
+      const toggle = el('button', 'cc-btn cc-btn--primary-ghost cc-edit-toggle', 'Edit session');
+      toggle.type = 'button';
+      toggle.setAttribute('aria-expanded', 'false');
+      toggle.addEventListener('click', () => {
+        panel.hidden = !panel.hidden;
+        toggle.setAttribute('aria-expanded', String(!panel.hidden));
+      });
+      actions.appendChild(toggle);
+    }
 
     if (live) {
       actions.appendChild(button('Copy code', async (btn) => {
@@ -219,6 +255,7 @@
     actions.appendChild(del);
 
     card.appendChild(actions);
+    if (panel) card.appendChild(panel);
     return card;
   }
 
@@ -261,6 +298,269 @@
     ));
     return note;
   }
+
+  /* ── Editing a running classroom ──────────────────────────────────
+   *
+   * Built as an inline panel on the card rather than a modal: a teacher
+   * editing a live session needs the current usage visible while they choose
+   * new numbers, and a modal covers exactly that.
+   *
+   * Nothing here enforces anything. Every value is re-validated by the server,
+   * which is the only thing that decides. What this does is show the
+   * consequence of a change BEFORE it is saved — particularly a reduction,
+   * which stops the class immediately and should never be a surprise.
+   */
+
+  const pad = (n) => String(n).padStart(2, '0');
+
+  /** ISO timestamp -> the value a datetime-local input wants, in local time. */
+  function toLocalInput(iso) {
+    const d = new Date(iso);
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}` +
+           `T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  }
+
+  function field(labelText, control, help) {
+    const wrap = el('div', 'cc-field');
+    const label = el('label', 'cc-field__label', labelText);
+    wrap.appendChild(label);
+    wrap.appendChild(control);
+    if (help) wrap.appendChild(el('span', 'cc-field__help', help));
+    return wrap;
+  }
+
+  function numberInput(className, value, { min, max }) {
+    const input = el('input', className);
+    // setAttribute rather than the properties: the browser reflects `.min` to
+    // the attribute, but the DOM used in tests does not, and the bound has to be
+    // in the markup for the browser's own validation to apply it.
+    input.setAttribute('type', 'number');
+    input.setAttribute('min', String(min));
+    input.setAttribute('max', String(max));
+    input.setAttribute('step', '1');
+    if (value !== null && value !== undefined) input.value = String(value);
+    return input;
+  }
+
+  /**
+   * The edit panel for one classroom.
+   *
+   * `room` is the ownerView the dashboard already has, so the form opens
+   * showing what the classroom is actually set to right now.
+   */
+  function editPanel(room, onSaved) {
+    const form = el('form', 'cc-edit');
+    form.hidden = true;
+
+    const expected = numberInput('cc-edit__expected', room.expectedStudents, {
+      min: formLimits.minExpectedStudents, max: formLimits.maxExpectedStudents,
+    });
+    expected.placeholder = String(formLimits.defaultExpectedStudents);
+
+    const perStudent = numberInput('cc-edit__per-student', room.claimLimitPerStudent, {
+      min: formLimits.minClaimsPerStudent, max: formLimits.maxClaimsPerStudent,
+    });
+    perStudent.placeholder = String(formLimits.defaultClaimsPerStudent);
+
+    const row = el('div', 'cc-field-row');
+    row.appendChild(field('Expected students', expected, 'A count only — never a list of names.'));
+    row.appendChild(field(
+      'ClaimChecks per student',
+      perStudent,
+      `${formLimits.minClaimsPerStudent}–${formLimits.maxClaimsPerStudent}. Applies to students already in the room.`
+    ));
+    form.appendChild(row);
+
+    /* ── Allowance mode ── */
+    const modeName = `mode-${room.id}`;
+    const autoRadio = el('input');
+    autoRadio.type = 'radio';
+    autoRadio.name = modeName;
+    autoRadio.className = 'cc-edit__mode-auto';
+    autoRadio.value = 'automatic';
+    const customRadio = el('input');
+    customRadio.type = 'radio';
+    customRadio.name = modeName;
+    customRadio.className = 'cc-edit__mode-custom';
+    customRadio.value = 'custom';
+    if (room.allowanceMode === 'custom') customRadio.checked = true;
+    else autoRadio.checked = true;
+
+    const customTotal = numberInput('cc-edit__custom-total',
+      room.allowanceMode === 'custom' ? room.effectiveClaimLimit : null,
+      { min: 1, max: MAX_CUSTOM });
+    customTotal.placeholder = 'e.g. 3';
+
+    const modeBox = el('fieldset', 'cc-edit__modes');
+    modeBox.appendChild(el('legend', 'cc-field__label', 'Allowance'));
+
+    const autoLabel = el('label', 'cc-edit__mode');
+    autoLabel.appendChild(autoRadio);
+    autoLabel.appendChild(el('span', '', 'Automatic'));
+    const autoHint = el('span', 'cc-edit__mode-hint');
+    autoLabel.appendChild(autoHint);
+    modeBox.appendChild(autoLabel);
+
+    const customLabel = el('label', 'cc-edit__mode');
+    customLabel.appendChild(customRadio);
+    customLabel.appendChild(el('span', '', 'Custom total'));
+    customLabel.appendChild(customTotal);
+    customLabel.appendChild(el('span', 'cc-edit__mode-hint', `Whole class, max ${MAX_CUSTOM}`));
+    modeBox.appendChild(customLabel);
+    form.appendChild(modeBox);
+
+    /* ── Closing time ── */
+    const closesAt = el('input', 'cc-edit__closes-at');
+    closesAt.type = 'datetime-local';
+    closesAt.value = toLocalInput(room.expiresAt);
+
+    const extendRow = el('div', 'cc-edit__extend');
+    for (const [label, minutes] of [['+15 min', 15], ['+30 min', 30], ['+1 hour', 60]]) {
+      const b = el('button', 'cc-btn cc-btn--tiny', label);
+      b.type = 'button';
+      b.addEventListener('click', () => {
+        const from = new Date(closesAt.value || room.expiresAt);
+        closesAt.value = toLocalInput(new Date(from.getTime() + minutes * 60000).toISOString());
+        renderPreview();
+      });
+      extendRow.appendChild(b);
+    }
+    const closeField = field('Classroom closes at', closesAt,
+      'An absolute time, so extending twice does not double-count. Between 5 minutes and 30 days from now.');
+    closeField.appendChild(extendRow);
+    form.appendChild(closeField);
+
+    /* ── Live preview ── */
+    const preview = el('p', 'cc-edit__preview');
+    preview.setAttribute('aria-live', 'polite');
+    form.appendChild(preview);
+
+    const error = el('div', 'cc-error');
+    error.hidden = true;
+    error.setAttribute('role', 'alert');
+    form.appendChild(error);
+
+    /** The capacity the current form values would produce. */
+    function plannedCapacity() {
+      if (customRadio.checked) {
+        const n = optionalCount(customTotal.value);
+        if (typeof n !== 'number' || n < 1 || n > MAX_CUSTOM) return null;
+        return n;
+      }
+      const students = optionalCount(expected.value);
+      const each = optionalCount(perStudent.value);
+      const s = typeof students === 'number' ? students : formLimits.defaultExpectedStudents;
+      const e = typeof each === 'number' ? each : formLimits.defaultClaimsPerStudent;
+      if (!inFormRange(s, formLimits.minExpectedStudents, formLimits.maxExpectedStudents)) return null;
+      if (!inFormRange(e, formLimits.minClaimsPerStudent, formLimits.maxClaimsPerStudent)) return null;
+      return Math.round((s * e * formLimits.headroomPercent) / 100);
+    }
+
+    function renderPreview() {
+      const used = room.claimsUsed;
+      const students = optionalCount(expected.value);
+      const each = optionalCount(perStudent.value);
+      const s = typeof students === 'number' ? students : formLimits.defaultExpectedStudents;
+      const e = typeof each === 'number' ? each : formLimits.defaultClaimsPerStudent;
+      autoHint.textContent = `${plural(s, 'student')} × ${plural(e, 'ClaimCheck')} = ` +
+                             `${numberFmt.format(Math.round((s * e * formLimits.headroomPercent) / 100))} total`;
+      customTotal.disabled = !customRadio.checked;
+
+      const capacity = plannedCapacity();
+      if (capacity === null) {
+        preview.className = 'cc-edit__preview cc-edit__preview--warn';
+        preview.textContent = customRadio.checked
+          ? `Enter a custom total between 1 and ${MAX_CUSTOM} ClaimChecks.`
+          : `Check the class size (${formLimits.minExpectedStudents}–${formLimits.maxExpectedStudents}) ` +
+            `and ClaimChecks per student (${formLimits.minClaimsPerStudent}–${formLimits.maxClaimsPerStudent}).`;
+        return;
+      }
+
+      if (capacity < used) {
+        preview.className = 'cc-edit__preview cc-edit__preview--warn';
+        preview.textContent =
+          `New capacity: ${plural(capacity, 'ClaimCheck')}. ${numberFmt.format(used)} already used — ` +
+          'this classroom will stop accepting new ClaimChecks immediately. Work already done is kept.';
+        return;
+      }
+
+      preview.className = 'cc-edit__preview';
+      preview.textContent =
+        `New capacity: ${plural(capacity, 'ClaimCheck')}. ` +
+        `${numberFmt.format(used)} already used, ${numberFmt.format(capacity - used)} remaining.`;
+    }
+
+    for (const control of [expected, perStudent, customTotal]) {
+      control.addEventListener('input', renderPreview);
+    }
+    for (const control of [autoRadio, customRadio]) {
+      control.addEventListener('change', renderPreview);
+    }
+    closesAt.addEventListener('input', renderPreview);
+    renderPreview();
+
+    /* ── Actions ── */
+    const actions = el('div', 'cc-edit__actions');
+    const save = el('button', 'btn-primary cc-edit__save', 'Save changes');
+    save.type = 'submit';
+    const cancel = el('button', 'cc-btn cc-edit__cancel', 'Cancel');
+    cancel.type = 'button';
+    cancel.addEventListener('click', () => { form.hidden = true; });
+    actions.appendChild(save);
+    actions.appendChild(cancel);
+    form.appendChild(actions);
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      clearError(error);
+
+      const capacity = plannedCapacity();
+      if (capacity === null) { showError(error, preview.textContent); return; }
+
+      // The one change worth stopping to confirm: it ends the class's ability
+      // to start anything new, the moment it saves.
+      if (capacity < room.claimsUsed) {
+        const ok = window.confirm(
+          `${room.claimsUsed} ClaimChecks have already been used. Setting the allowance to ` +
+          `${capacity} will immediately stop new analyses. Continue?`
+        );
+        if (!ok) return;
+      }
+
+      const closing = new Date(closesAt.value);
+      if (Number.isNaN(closing.getTime())) {
+        showError(error, 'Enter a valid closing time.');
+        return;
+      }
+
+      save.disabled = true;
+      save.textContent = 'Saving…';
+      try {
+        await api(`/rooms/${room.id}`, {
+          method: 'PATCH',
+          body: {
+            expectedStudents: forRequest(optionalCount(expected.value)),
+            claimLimitPerStudent: forRequest(optionalCount(perStudent.value)),
+            allowanceMode: customRadio.checked ? 'custom' : 'automatic',
+            customClaimLimit: customRadio.checked ? forRequest(optionalCount(customTotal.value)) : undefined,
+            expiresAt: closing.toISOString(),
+          },
+        });
+        form.hidden = true;
+        await onSaved();
+      } catch (err) {
+        showError(error, err.message);
+      } finally {
+        save.disabled = false;
+        save.textContent = 'Save changes';
+      }
+    });
+
+    return form;
+  }
+
+  const MAX_CUSTOM = 150;
+  const inFormRange = (v, lo, hi) => typeof v === 'number' && v >= lo && v <= hi;
 
   function button(label, handler) {
     const btn = el('button', 'cc-btn', label);

@@ -1354,3 +1354,533 @@ test('a classroom stored with zeroes is still gated, not unlimited', async () =>
   assert.equal(res.body._classroom.claimsRemaining, 99);
   assert.deepEqual(res.body._classroom.claims, { used: 1, limit: 4 });
 });
+
+/* ── 21. Editing a running classroom ──────────────────────────────────────
+ *
+ * A teacher changing limits mid-lesson, driven over real HTTP against the real
+ * route. The properties that matter are that usage is never rewritten, that the
+ * new limit takes effect on the very next reservation, and that no combination
+ * of inputs produces a classroom without a bound.
+ */
+
+const editHeaders = () => ({ Authorization: 'Bearer teacher-token' });
+
+/** Creates a classroom through the API and returns its ownerView. */
+async function createRoomFor(overrides = {}) {
+  const res = await post('/api/classroom/rooms', {
+    displayName: 'Period 3 Civics',
+    expiresAt: new Date(Date.now() + 90 * 60 * 1000).toISOString(),
+    ...overrides,
+  }, editHeaders());
+  assert.equal(res.status, 201, `create failed: ${res.raw.slice(0, 200)}`);
+  return res.body.classroom;
+}
+
+async function editRoom(id, body) {
+  const res = await realFetch(`${baseUrl}/api/classroom/rooms/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', ...editHeaders() },
+    body: JSON.stringify(body),
+  });
+  const text = await res.text();
+  let json = null;
+  try { json = JSON.parse(text); } catch { /* non-JSON */ }
+  return { status: res.status, body: json, raw: text };
+}
+
+/** A student joined to an existing db row, ready to submit. */
+function studentFor(room) {
+  return {
+    'X-Classroom-Session': classroomLib.mintSessionToken(room),
+    'X-Claimcheck-Student': crypto.randomUUID(),
+  };
+}
+
+const EDIT_CLAIM = 'A real claim to check here.';
+
+/* ── Automatic capacity editing ───────────────────────────────────────── */
+
+test('raising the expected roster raises the capacity immediately', async () => {
+  const room = await createRoomFor({ expectedStudents: 25, claimLimitPerStudent: 4 });
+  assert.equal(room.effectiveClaimLimit, 100);
+
+  const edited = await editRoom(room.id, { expectedStudents: 30 });
+
+  assert.equal(edited.status, 200);
+  assert.equal(edited.body.classroom.effectiveClaimLimit, 120, '30 x 4 = 120');
+  assert.equal(edited.body.classroom.allowanceMode, 'automatic');
+});
+
+test('raising ClaimChecks per student raises the capacity immediately', async () => {
+  const room = await createRoomFor({ expectedStudents: 25, claimLimitPerStudent: 4 });
+
+  const edited = await editRoom(room.id, { claimLimitPerStudent: 5 });
+
+  assert.equal(edited.body.classroom.effectiveClaimLimit, 125, '25 x 5 = 125');
+  assert.equal(edited.body.classroom.effectiveClaimLimitPerStudent, 5);
+});
+
+test('an automatic classroom may exceed the 150 custom cap', async () => {
+  // The distinction the cap exists for: 200 derived from a real roster is a
+  // considered number; 200 typed into a box is usually a mistake.
+  const room = await createRoomFor({ expectedStudents: 50, claimLimitPerStudent: 4 });
+  assert.equal(room.effectiveClaimLimit, 200);
+
+  const edited = await editRoom(room.id, { expectedStudents: 60 });
+  assert.equal(edited.status, 200);
+  assert.equal(edited.body.classroom.effectiveClaimLimit, 240);
+});
+
+/* ── Usage is never rewritten ─────────────────────────────────────────── */
+
+test('raising the allowance preserves every counter', async () => {
+  const room = await createRoomFor({ expectedStudents: 25, claimLimitPerStudent: 20 });
+  const headers = studentFor(db.classrooms.get(room.id));
+
+  for (let i = 0; i < 3; i++) {
+    assert.equal((await post('/api/classroom/analyze', { text: EDIT_CLAIM }, headers)).status, 200);
+  }
+  const before = { ...db.classrooms.get(room.id) };
+
+  const edited = await editRoom(room.id, { expectedStudents: 30 });
+
+  assert.equal(edited.body.classroom.claimsUsed, 3, 'usage is history, not state to reset');
+  assert.equal(edited.body.classroom.effectiveClaimLimit, 600, '30 x 20');
+  assert.equal(edited.body.classroom.claimsRemaining, 597);
+
+  const after = db.classrooms.get(room.id);
+  assert.equal(after.claims_used, before.claims_used);
+  assert.equal(after.analyses_run, before.analyses_run);
+  assert.equal(after.tokens_used, before.tokens_used);
+  assert.equal(after.searches_used, before.searches_used);
+});
+
+test('the per-student counter survives a per-student limit change', async () => {
+  const room = await createRoomFor({ expectedStudents: 25, claimLimitPerStudent: 4 });
+  const headers = studentFor(db.classrooms.get(room.id));
+  const key = `${room.id}:${headers['X-Claimcheck-Student']}`;
+
+  for (let i = 0; i < 3; i++) {
+    await post('/api/classroom/analyze', { text: EDIT_CLAIM }, headers);
+  }
+  assert.equal(db.students.get(key), 3);
+
+  await editRoom(room.id, { claimLimitPerStudent: 6 });
+
+  assert.equal(db.students.get(key), 3, 'the student keeps what they used');
+  const session = await realFetch(`${baseUrl}/api/classroom/session`, { headers });
+  const body = await session.json();
+  assert.deepEqual(body.claims.student, { used: 3, limit: 6 }, 'and gains 3 more');
+});
+
+test('a student whose allowance was raised can immediately use the new room', async () => {
+  const room = await createRoomFor({ expectedStudents: 25, claimLimitPerStudent: 4 });
+  const headers = studentFor(db.classrooms.get(room.id));
+
+  for (let i = 0; i < 4; i++) {
+    assert.equal((await post('/api/classroom/analyze', { text: EDIT_CLAIM }, headers)).status, 200);
+  }
+  const blocked = await post('/api/classroom/analyze', { text: EDIT_CLAIM }, headers);
+  assert.equal(blocked.body.code, 'STUDENT_LIMIT');
+
+  await editRoom(room.id, { claimLimitPerStudent: 6 });
+
+  const allowed = await post('/api/classroom/analyze', { text: EDIT_CLAIM }, headers);
+  assert.equal(allowed.status, 200, 'the new limit applies without rejoining');
+  assert.equal(allowed.body._classroom.claims.used, 5);
+});
+
+/* ── Lowering ─────────────────────────────────────────────────────────── */
+
+test('lowering the allowance below usage is allowed and stops the class', async () => {
+  const room = await createRoomFor({ expectedStudents: 25, claimLimitPerStudent: 20 });
+  const headers = studentFor(db.classrooms.get(room.id));
+
+  for (let i = 0; i < 3; i++) {
+    await post('/api/classroom/analyze', { text: EDIT_CLAIM }, headers);
+  }
+
+  const edited = await editRoom(room.id, { allowanceMode: 'custom', customClaimLimit: 2 });
+
+  assert.equal(edited.status, 200, 'a teacher who needs to stop a class must be able to');
+  assert.equal(edited.body.classroom.claimsUsed, 3, 'history is not rewritten');
+  assert.equal(edited.body.classroom.effectiveClaimLimit, 2);
+  assert.equal(edited.body.classroom.claimsRemaining, 0, 'floors at zero, never negative');
+  assert.equal(edited.body.classroom.overCapacity, true);
+  assert.equal(edited.body.classroom.usable, false);
+
+  const blocked = await post('/api/classroom/analyze', { text: EDIT_CLAIM }, headers);
+  assert.equal(blocked.status, 429);
+  assert.equal(blocked.body.code, 'CLASSROOM_LIMIT');
+});
+
+test('lowering a per-student limit below usage leaves that student at zero', async () => {
+  const room = await createRoomFor({ expectedStudents: 25, claimLimitPerStudent: 6 });
+  const headers = studentFor(db.classrooms.get(room.id));
+
+  for (let i = 0; i < 4; i++) {
+    await post('/api/classroom/analyze', { text: EDIT_CLAIM }, headers);
+  }
+
+  await editRoom(room.id, { claimLimitPerStudent: 3 });
+
+  const session = await realFetch(`${baseUrl}/api/classroom/session`, { headers });
+  const body = await session.json();
+  assert.deepEqual(body.claims.student, { used: 4, limit: 3 }, 'no refund, no rewrite');
+
+  const blocked = await post('/api/classroom/analyze', { text: EDIT_CLAIM }, headers);
+  assert.equal(blocked.body.code, 'STUDENT_LIMIT');
+  assert.equal(db.students.get(`${room.id}:${headers['X-Claimcheck-Student']}`), 4);
+});
+
+/* ── Custom allowance ─────────────────────────────────────────────────── */
+
+test('a custom allowance of 3 means three for the whole class, not per student', async () => {
+  const room = await createRoomFor({ expectedStudents: 20, claimLimitPerStudent: 4 });
+  await editRoom(room.id, { allowanceMode: 'custom', customClaimLimit: 3 });
+
+  // Three different students, one ClaimCheck each, then the class is done.
+  const students = [0, 1, 2, 3].map(() => studentFor(db.classrooms.get(room.id)));
+  for (let i = 0; i < 3; i++) {
+    assert.equal((await post('/api/classroom/analyze', { text: EDIT_CLAIM }, students[i])).status, 200);
+  }
+
+  const blocked = await post('/api/classroom/analyze', { text: EDIT_CLAIM }, students[3]);
+  assert.equal(blocked.status, 429);
+  assert.equal(blocked.body.code, 'CLASSROOM_LIMIT');
+  assert.equal(db.classrooms.get(room.id).claims_used, 3);
+});
+
+test('custom mode does not disable the per-student limit', async () => {
+  // Whichever limit is reached first wins. Here the student's own cap of 2 is
+  // the tighter one, and it must still apply under a custom class total of 30.
+  const room = await createRoomFor({ expectedStudents: 20, claimLimitPerStudent: 2 });
+  await editRoom(room.id, { allowanceMode: 'custom', customClaimLimit: 30 });
+
+  const headers = studentFor(db.classrooms.get(room.id));
+  for (let i = 0; i < 2; i++) {
+    assert.equal((await post('/api/classroom/analyze', { text: EDIT_CLAIM }, headers)).status, 200);
+  }
+
+  const blocked = await post('/api/classroom/analyze', { text: EDIT_CLAIM }, headers);
+  assert.equal(blocked.body.code, 'STUDENT_LIMIT', 'the per-student gate survives custom mode');
+  assert.equal(db.classrooms.get(room.id).claims_used, 2, 'the class total is nowhere near 30');
+});
+
+test('every accepted custom allowance is honoured exactly', async () => {
+  for (const total of [1, 3, 50, 150]) {
+    const room = await createRoomFor({ expectedStudents: 25, claimLimitPerStudent: 4 });
+    const edited = await editRoom(room.id, { allowanceMode: 'custom', customClaimLimit: total });
+    assert.equal(edited.status, 200, `custom ${total} must be accepted`);
+    assert.equal(edited.body.classroom.effectiveClaimLimit, total);
+    assert.equal(edited.body.classroom.allowanceMode, 'custom');
+  }
+});
+
+test('a custom allowance outside 1-150 is refused, and nothing is written', async () => {
+  const room = await createRoomFor({ expectedStudents: 25, claimLimitPerStudent: 4 });
+
+  for (const bad of [0, 151, 200, -1, 3.5, true, false, [], {}, [3], 'three', '', null, undefined, NaN, Infinity]) {
+    const res = await editRoom(room.id, { allowanceMode: 'custom', customClaimLimit: bad });
+    assert.equal(res.status, 400, `customClaimLimit=${JSON.stringify(bad)} must be refused`);
+    assert.match(res.body.error, /between 1 and 150/);
+  }
+
+  const stored = db.classrooms.get(room.id);
+  assert.equal(stored.claim_limit, null, 'the classroom is untouched by a refused edit');
+  assert.equal(stored.expected_students, 25);
+});
+
+test('an unrecognised allowance mode is refused, including "unlimited"', async () => {
+  const room = await createRoomFor({ expectedStudents: 25, claimLimitPerStudent: 4 });
+
+  for (const bad of ['unlimited', 'none', 'Automatic', 'CUSTOM', '', 'auto', 0, 1, true, [], {}, null]) {
+    const res = await editRoom(room.id, { allowanceMode: bad, customClaimLimit: 10 });
+    assert.equal(res.status, 400, `allowanceMode=${JSON.stringify(bad)} must be refused`);
+    assert.match(res.body.error, /automatic|custom/i);
+  }
+
+  assert.equal(db.classrooms.get(room.id).claim_limit, null);
+});
+
+test('a bare claimLimit is capped at 150 too, so neither spelling is looser', async () => {
+  const room = await createRoomFor({ expectedStudents: 25, claimLimitPerStudent: 4 });
+
+  assert.equal((await editRoom(room.id, { claimLimit: 150 })).status, 200);
+  assert.equal((await editRoom(room.id, { claimLimit: 151 })).status, 400);
+  assert.equal((await editRoom(room.id, { claimLimit: 300 })).status, 400);
+  assert.equal(db.classrooms.get(room.id).claim_limit, 150);
+});
+
+/* ── Mode switching ───────────────────────────────────────────────────── */
+
+test('switching automatic to custom and back preserves usage both ways', async () => {
+  const room = await createRoomFor({ expectedStudents: 25, claimLimitPerStudent: 20 });
+  const headers = studentFor(db.classrooms.get(room.id));
+  for (let i = 0; i < 2; i++) await post('/api/classroom/analyze', { text: EDIT_CLAIM }, headers);
+
+  const toCustom = await editRoom(room.id, { allowanceMode: 'custom', customClaimLimit: 3 });
+  assert.equal(toCustom.body.classroom.allowanceMode, 'custom');
+  assert.equal(toCustom.body.classroom.effectiveClaimLimit, 3);
+  assert.equal(toCustom.body.classroom.claimsUsed, 2);
+
+  const backToAuto = await editRoom(room.id, {
+    allowanceMode: 'automatic', expectedStudents: 25, claimLimitPerStudent: 4,
+  });
+  assert.equal(backToAuto.body.classroom.allowanceMode, 'automatic');
+  assert.equal(backToAuto.body.classroom.effectiveClaimLimit, 100, '25 x 4, derived again');
+  assert.equal(backToAuto.body.classroom.claimsUsed, 2, 'still 2, throughout');
+  assert.equal(db.classrooms.get(room.id).claim_limit, null, 'automatic stores no explicit total');
+});
+
+test('an automatic classroom follows its roster again after leaving custom mode', async () => {
+  const room = await createRoomFor({ expectedStudents: 25, claimLimitPerStudent: 4 });
+  await editRoom(room.id, { allowanceMode: 'custom', customClaimLimit: 10 });
+  await editRoom(room.id, { allowanceMode: 'automatic' });
+
+  const edited = await editRoom(room.id, { expectedStudents: 30 });
+  assert.equal(edited.body.classroom.effectiveClaimLimit, 120, 'derivation is live again');
+});
+
+/* ── Session duration ─────────────────────────────────────────────────── */
+
+test('a session can be extended and shortened while it runs', async () => {
+  const room = await createRoomFor({ expectedStudents: 25, claimLimitPerStudent: 4 });
+  const headers = studentFor(db.classrooms.get(room.id));
+
+  const later = new Date(Date.now() + 3 * 60 * 60 * 1000).toISOString();
+  const extended = await editRoom(room.id, { expiresAt: later });
+  assert.equal(extended.status, 200);
+  assert.equal(new Date(extended.body.classroom.expiresAt).getTime(), new Date(later).getTime());
+
+  const sooner = new Date(Date.now() + 10 * 60 * 1000).toISOString();
+  const shortened = await editRoom(room.id, { expiresAt: sooner });
+  assert.equal(shortened.status, 200);
+  assert.equal(new Date(shortened.body.classroom.expiresAt).getTime(), new Date(sooner).getTime());
+
+  // Students stay joined across both changes — their token names the classroom,
+  // not the closing time.
+  assert.equal((await post('/api/classroom/analyze', { text: EDIT_CLAIM }, headers)).status, 200);
+});
+
+test('a closing time in the past, or too far out, is refused', async () => {
+  const room = await createRoomFor({ expectedStudents: 25, claimLimitPerStudent: 4 });
+
+  for (const bad of [
+    new Date(Date.now() - 60 * 1000).toISOString(),        // already gone
+    new Date(Date.now() + 60 * 1000).toISOString(),        // under the 5-minute floor
+    new Date(Date.now() + 40 * 24 * 3600 * 1000).toISOString(), // over 30 days
+    'not-a-date',
+  ]) {
+    const res = await editRoom(room.id, { expiresAt: bad });
+    assert.equal(res.status, 400, `expiresAt=${bad} must be refused`);
+  }
+});
+
+test('the new closing time is what actually ends the session', async () => {
+  const room = await createRoomFor({ expectedStudents: 25, claimLimitPerStudent: 4 });
+  const headers = studentFor(db.classrooms.get(room.id));
+
+  // Shorten to the minimum, then move the stored row past it, which is what the
+  // clock would do a few minutes later.
+  await editRoom(room.id, { expiresAt: new Date(Date.now() + 6 * 60 * 1000).toISOString() });
+  db.classrooms.get(room.id).expires_at = new Date(Date.now() - 1000).toISOString();
+
+  const res = await post('/api/classroom/analyze', { text: EDIT_CLAIM }, headers);
+  assert.equal(res.status, 403);
+  assert.equal(res.body.code, 'CLASSROOM_EXPIRED');
+});
+
+test('an expired classroom cannot be edited or reopened', async () => {
+  const room = await createRoomFor({ expectedStudents: 25, claimLimitPerStudent: 4 });
+  db.classrooms.get(room.id).expires_at = new Date(Date.now() - 1000).toISOString();
+
+  const res = await editRoom(room.id, {
+    expiresAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+  });
+
+  assert.equal(res.status, 403);
+  assert.equal(res.body.code, 'CLASSROOM_EXPIRED');
+  assert.ok(new Date(db.classrooms.get(room.id).expires_at).getTime() < Date.now(),
+    'extending an ended session must not quietly reopen it');
+});
+
+/* ── Token safety ceiling ─────────────────────────────────────────────── */
+
+test('the token ceiling is re-sized with the allowance, in both directions', async () => {
+  const room = await createRoomFor({ expectedStudents: 25, claimLimitPerStudent: 4 });
+  assert.equal(room.tokenSafetyLimit, 100 * 90000);
+
+  const up = await editRoom(room.id, { expectedStudents: 30 });
+  assert.equal(up.body.classroom.tokenSafetyLimit, 120 * 90000);
+
+  const down = await editRoom(room.id, { allowanceMode: 'custom', customClaimLimit: 3 });
+  assert.equal(down.body.classroom.tokenSafetyLimit, appLimits.tokenSafetyLimitFor(3),
+    'a 3-ClaimCheck room must not keep a 100-ClaimCheck ceiling');
+  assert.ok(down.body.classroom.tokenSafetyLimit > 0);
+});
+
+test('a shrunken classroom keeps its recorded token usage', async () => {
+  const room = await createRoomFor({ expectedStudents: 25, claimLimitPerStudent: 20 });
+  const headers = studentFor(db.classrooms.get(room.id));
+  await post('/api/classroom/analyze', { text: EDIT_CLAIM }, headers);
+  const spent = db.classrooms.get(room.id).tokens_used;
+  assert.ok(spent > 0);
+
+  await editRoom(room.id, { allowanceMode: 'custom', customClaimLimit: 1 });
+
+  assert.equal(db.classrooms.get(room.id).tokens_used, spent, 'cost history is never rewritten');
+});
+
+test('no edit can produce a classroom without a finite allowance and ceiling', async () => {
+  const room = await createRoomFor({ expectedStudents: 25, claimLimitPerStudent: 4 });
+
+  const edits = [
+    { allowanceMode: 'automatic' },
+    { allowanceMode: 'custom', customClaimLimit: 1 },
+    { allowanceMode: 'custom', customClaimLimit: 150 },
+    { expectedStudents: 1, claimLimitPerStudent: 1 },
+    { expectedStudents: 1000, claimLimitPerStudent: 20 },
+    { claimLimitPerStudent: 20 },
+  ];
+
+  for (const body of edits) {
+    const res = await editRoom(room.id, body);
+    assert.equal(res.status, 200, `${JSON.stringify(body)} should be accepted`);
+    const view = res.body.classroom;
+    assert.ok(Number.isFinite(view.effectiveClaimLimit) && view.effectiveClaimLimit >= 1,
+      `${JSON.stringify(body)} -> allowance ${view.effectiveClaimLimit}`);
+    assert.ok(Number.isFinite(view.tokenSafetyLimit) && view.tokenSafetyLimit > 0,
+      `${JSON.stringify(body)} -> ceiling ${view.tokenSafetyLimit}`);
+    assert.ok(db.classrooms.get(room.id).token_safety_limit > 0);
+  }
+});
+
+/* ── Concurrency ──────────────────────────────────────────────────────── */
+
+test('raising the allowance mid-flight lets the next reservations through', async () => {
+  // 3 of 3 used, so the class is full; the edit commits and it is not.
+  const room = await createRoomFor({ expectedStudents: 25, claimLimitPerStudent: 20 });
+  await editRoom(room.id, { allowanceMode: 'custom', customClaimLimit: 3 });
+  const headers = studentFor(db.classrooms.get(room.id));
+
+  for (let i = 0; i < 3; i++) await post('/api/classroom/analyze', { text: EDIT_CLAIM }, headers);
+  assert.equal((await post('/api/classroom/analyze', { text: EDIT_CLAIM }, headers)).status, 429);
+
+  await editRoom(room.id, { allowanceMode: 'custom', customClaimLimit: 6 });
+
+  const results = await Promise.all(
+    Array.from({ length: 10 }, () => post('/api/classroom/analyze', { text: EDIT_CLAIM }, headers))
+  );
+  assert.equal(results.filter((r) => r.status === 200).length, 3, 'exactly the 3 newly added');
+  assert.equal(db.classrooms.get(room.id).claims_used, 6, 'and never past the new limit');
+});
+
+test('lowering the allowance mid-flight stops the next reservations', async () => {
+  const room = await createRoomFor({ expectedStudents: 25, claimLimitPerStudent: 20 });
+  await editRoom(room.id, { allowanceMode: 'custom', customClaimLimit: 100 });
+  const headers = studentFor(db.classrooms.get(room.id));
+
+  for (let i = 0; i < 5; i++) await post('/api/classroom/analyze', { text: EDIT_CLAIM }, headers);
+
+  await editRoom(room.id, { allowanceMode: 'custom', customClaimLimit: 5 });
+
+  const results = await Promise.all(
+    Array.from({ length: 10 }, () => post('/api/classroom/analyze', { text: EDIT_CLAIM }, headers))
+  );
+  assert.equal(results.filter((r) => r.status === 200).length, 0, 'the class is full the moment it commits');
+  assert.equal(db.classrooms.get(room.id).claims_used, 5, 'and the counter never moves past it');
+});
+
+test('an edit landing among concurrent submissions corrupts no counter', async () => {
+  const room = await createRoomFor({ expectedStudents: 25, claimLimitPerStudent: 20 });
+  await editRoom(room.id, { allowanceMode: 'custom', customClaimLimit: 8 });
+  const headers = studentFor(db.classrooms.get(room.id));
+
+  // Twenty submissions racing one per-student limit change.
+  const work = Array.from({ length: 20 }, () => post('/api/classroom/analyze', { text: EDIT_CLAIM }, headers));
+  const edit = editRoom(room.id, { claimLimitPerStudent: 4 });
+  const [results] = await Promise.all([Promise.all(work), edit]);
+
+  const room2 = db.classrooms.get(room.id);
+  const studentUsed = db.students.get(`${room.id}:${headers['X-Claimcheck-Student']}`);
+
+  assert.ok(room2.claims_used >= 0 && studentUsed >= 0, 'nothing goes negative');
+  assert.ok(room2.claims_used <= 8, `class total ${room2.claims_used} must never exceed 8`);
+  assert.equal(room2.claims_used, results.filter((r) => r.status === 200).length,
+    'the counter matches the work that actually succeeded');
+  assert.equal(room2.claims_used, room2.analyses_run);
+});
+
+/* ── Authorization ────────────────────────────────────────────────────── */
+
+test('a student session cannot edit the classroom it is in', async () => {
+  const room = await createRoomFor({ expectedStudents: 25, claimLimitPerStudent: 4 });
+  const headers = studentFor(db.classrooms.get(room.id));
+
+  const res = await realFetch(`${baseUrl}/api/classroom/rooms/${room.id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', ...headers },
+    body: JSON.stringify({ allowanceMode: 'custom', customClaimLimit: 150, claimLimitPerStudent: 20 }),
+  });
+
+  assert.equal(res.status, 401, 'a classroom session is not a teacher credential');
+  assert.equal(db.classrooms.get(room.id).claim_limit, null);
+  assert.equal(db.classrooms.get(room.id).claim_limit_per_student, 4);
+});
+
+test('an unauthenticated request cannot edit a classroom', async () => {
+  const room = await createRoomFor({ expectedStudents: 25, claimLimitPerStudent: 4 });
+
+  const res = await realFetch(`${baseUrl}/api/classroom/rooms/${room.id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ expectedStudents: 900 }),
+  });
+
+  assert.equal(res.status, 401);
+  assert.equal(db.classrooms.get(room.id).expected_students, 25);
+});
+
+test('a different educator cannot edit someone else classroom', async () => {
+  const room = await createRoomFor({ expectedStudents: 25, claimLimitPerStudent: 4 });
+  // Reassign the row to another owner: the requester is a valid educator but
+  // not this classroom's.
+  db.classrooms.get(room.id).owner_id = crypto.randomUUID();
+
+  const res = await editRoom(room.id, { expectedStudents: 900 });
+
+  assert.equal(res.status, 404, 'and it must not reveal that the classroom exists');
+  assert.equal(db.classrooms.get(room.id).expected_students, 25);
+});
+
+/* ── Privacy ──────────────────────────────────────────────────────────── */
+
+test('editing publishes nothing about individual students', async () => {
+  const room = await createRoomFor({ expectedStudents: 25, claimLimitPerStudent: 4 });
+  const headers = studentFor(db.classrooms.get(room.id));
+  await post('/api/classroom/analyze', { text: EDIT_CLAIM }, headers);
+
+  const edited = await editRoom(room.id, { expectedStudents: 30 });
+  const serialized = JSON.stringify(edited.body.classroom);
+
+  assert.equal(serialized.includes(headers['X-Claimcheck-Student']), false);
+  assert.equal(serialized.includes('session_secret'), false);
+  for (const value of Object.values(edited.body.classroom)) {
+    assert.equal(Array.isArray(value), false, 'no per-student collection may appear');
+  }
+});
+
+test('a student is told ClaimChecks after an edit, never tokens', async () => {
+  const room = await createRoomFor({ expectedStudents: 25, claimLimitPerStudent: 4 });
+  const headers = studentFor(db.classrooms.get(room.id));
+
+  await editRoom(room.id, { allowanceMode: 'custom', customClaimLimit: 10 });
+
+  const session = await realFetch(`${baseUrl}/api/classroom/session`, { headers });
+  const body = await session.json();
+
+  assert.equal(body.classroom.claimsTotal, 10, 'the new limit reaches students on their next poll');
+  assert.equal(Object.keys(body.classroom).some((k) => /token|budget|secret|code/i.test(k)), false,
+    Object.keys(body.classroom).join(','));
+});

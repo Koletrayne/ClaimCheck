@@ -256,6 +256,98 @@ An invariant enforced in one place is an invariant with a way around it.
 
 ---
 
+## 5c. Editing a running classroom
+
+*Added 2026-08-27.* A teacher can change a live classroom's roster, per-student
+allowance, total allowance, and closing time from the dashboard, without ending
+the session. `PATCH /api/classroom/rooms/:id`, owner-only.
+
+### Two allowance modes, one column
+
+There is no `allowance_mode` column. `claim_limit` already carries the
+distinction, and a second field describing the first is a field that can
+disagree with it:
+
+| `claim_limit` | Mode | Total |
+|---|---|---|
+| `NULL` | automatic | `expected_students × claim_limit_per_student`, recomputed on every read |
+| set | custom | exactly that number |
+
+The API accepts `allowanceMode` + `customClaimLimit`, and still accepts the bare
+`claimLimit` the create form has always sent. Both land on the same column under
+the same 1–150 bound, so neither spelling is looser than the other.
+
+### The 150 cap, and what it does not apply to
+
+An **explicitly typed** total is capped at 150 — in the form, in the route, and
+in the database (migration 004). A **derived** total is not: 75 students × 4 is
+300 ClaimChecks and is allowed, because it stores `NULL` and the constraint
+never sees it. That asymmetry is the point: 300 derived from a real roster is a
+considered number, 300 typed into a box is usually a typo. The create form's
+fixed-total options stop at 150 for the same reason.
+
+### Nothing is ever reset
+
+An edit writes settings, never counters. `claims_used`, `analyses_run`,
+`tokens_used`, `searches_used`, and every per-student counter are untouched by
+every path through the route.
+
+A new allowance **below** current usage is allowed. A teacher who needs to stop
+a class cannot be told the arithmetic forbids it. The work already done stays
+exactly as recorded, and the classroom simply has nothing left: `remainingClaims`
+floors at 0, `isUsable` goes false, and the reservation refuses with
+`CLASSROOM_LIMIT`. Nothing goes negative. `ownerView.overCapacity` marks it so
+the dashboard can say what "37 of 30 used" means rather than leaving it to be
+decoded. Raising the allowance again resumes the class from where it was.
+
+The same holds per student: 4 used against a new limit of 3 is 0 remaining, not
+a refund and not a rewrite.
+
+### Expired classrooms
+
+Refused (403 `CLASSROOM_EXPIRED`). Extending `expires_at` on a finished session
+would silently reopen it — students holding tokens minted before it ended would
+find it working again. Reopening may be worth supporting one day, but as a
+control that says so, not as a side effect of the edit form. Closing and
+deleting stay available; neither reopens anything.
+
+### Closing time
+
+Absolute `expires_at`, edited directly, so "extend by an hour" twice is
+unambiguous. The existing 5-minute-to-30-day bounds still apply, which means a
+closing time in the past is refused rather than ending a class by accident —
+"Close now" already exists separately for that.
+
+### Concurrency
+
+Unchanged. The reservation function was not touched. A PostgREST `PATCH` is a
+single `UPDATE`, and `claimcheck_reserve_claim` holds `FOR UPDATE` on the same
+row, so an edit and a reservation serialize against each other: once the edit
+commits, the very next reservation reads the new limit. Concurrent *teacher*
+edits are last-write-wins on the settings; counters are never read-modify-written
+and so are never at risk.
+
+### Token ceiling
+
+Recalculated from the new effective allowance whenever it changes, in both
+directions — a classroom cut to 3 ClaimChecks does not keep a 100-ClaimCheck
+ceiling. `tokens_used` is never reset.
+
+A shrunken classroom can in principle end up with a ceiling below its recorded
+usage, and is then safety-exhausted for future requests. In practice the
+ClaimCheck gate always fires first: reaching the ceiling instead would require
+`tokens_used / new_limit > 90,000` while `claims_used < new_limit`, and at ~29k
+per analysis those two cannot both hold. So a reduction never mislabels an
+ordinary classroom as a runaway.
+
+### Audit
+
+Every edit emits one `[classroom:audit]` line with before and after, the fields
+changed, current usage, and whether the result is over capacity. Classroom id
+and numbers only — no student id, no claim text, no access code.
+
+---
+
 ## 6. Gate order
 
 ```

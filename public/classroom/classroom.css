@@ -365,6 +365,69 @@
 .cc-advanced > summary:hover { color: var(--primary); }
 .cc-advanced[open] > summary { margin-bottom: 10px; }
 
+/* ── Editing a running classroom ──────────────────────────────────────
+   Sits inside the classroom card, below its actions, so the usage figures
+   above stay visible while the teacher chooses new numbers. That is the whole
+   argument against a modal here: the decision depends on what is already on
+   the card. */
+.cc-edit {
+  margin-top: 14px;
+  padding: 16px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+.cc-edit[hidden] { display: none; }
+
+.cc-edit__modes {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px 12px;
+  margin: 0 0 16px;
+  background: var(--card);
+}
+.cc-edit__modes > legend { padding: 0 6px; }
+
+.cc-edit__mode {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 6px 0;
+  font-size: 0.92rem;
+  cursor: pointer;
+}
+.cc-edit__mode input[type="number"] { width: 7rem; }
+.cc-edit__mode-hint { font-size: 0.8rem; color: var(--muted); }
+.cc-edit__mode input[type="number"]:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.cc-edit__extend { display: flex; gap: 6px; margin-top: 6px; flex-wrap: wrap; }
+.cc-btn--tiny { padding: 4px 9px; font-size: 0.78rem; }
+
+/* The consequence of the change, before it is saved. The warning variant is
+   the one that matters: a reduction stops the class the moment it commits. */
+.cc-edit__preview {
+  margin: 0 0 14px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  font-size: 0.88rem;
+  line-height: 1.45;
+}
+.cc-edit__preview--warn {
+  border-color: var(--danger, #c0392b);
+  border-left-width: 3px;
+}
+
+.cc-edit__actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.cc-edit__actions .btn-primary { width: auto; }
+
+.cc-btn--primary-ghost { border-color: var(--primary); color: var(--primary); }
+
 .cc-room__actions { display: flex; flex-wrap: wrap; gap: 8px; }
 
 .cc-btn {

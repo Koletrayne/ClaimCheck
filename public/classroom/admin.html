@@ -136,9 +136,14 @@
                 <option value="30">30 ClaimChecks</option>
                 <option value="75">75 ClaimChecks</option>
                 <option value="150">150 ClaimChecks</option>
-                <option value="300">300 ClaimChecks</option>
               </select>
-              <span class="cc-field__help">Shared by the whole class. Choose a fixed total to override the calculation.</span>
+              <!--
+                A fixed total is capped at 150. A bigger class is sized
+                automatically instead — 75 students x 4 is 300 ClaimChecks and
+                is perfectly allowed; what is not allowed is typing 300 into a
+                box, which is far more often a mistake than an intention.
+              -->
+              <span class="cc-field__help">Shared by the whole class. Choose a fixed total (up to 150) to override the calculation.</span>
             </div>
           </div>
 
